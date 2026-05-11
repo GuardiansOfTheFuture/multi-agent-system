@@ -1,0 +1,175 @@
+### ==========================================
+### PaperAI 多 Agent 论文写作系统 — HTTP 接口测试
+### 使用前请确保后端已启动（端口 8081）
+### 可在 VS Code 中安装 REST Client 插件运行
+### ==========================================
+
+### ==================== 1. 健康检查 ====================
+
+### 健康检查
+GET http://localhost:8081/api/paper/health
+
+### ==================== 2. 全流程论文写作 ====================
+
+### 2.1 完整论文写作（4个章节，最多2轮审稿）
+POST http://localhost:8081/api/paper/write
+Content-Type: application/json
+
+{
+  "topic": "深度学习在医疗影像分割中的应用",
+  "description": "探索基于U-Net和Transformer的医学图像分割方法，对比不同架构的性能差异",
+  "keywords": "深度学习,医疗影像,图像分割,U-Net,Transformer",
+  "sections": ["摘要", "引言", "相关工作", "方法", "实验", "结论"],
+  "maxReviewRounds": 3
+}
+
+### 2.2 简洁版论文写作（使用默认章节）
+POST http://localhost:8081/api/paper/write
+Content-Type: application/json
+
+{
+  "topic": "基于大语言模型的多Agent协作框架研究",
+  "keywords": "LLM,Multi-Agent,协作框架",
+  "maxReviewRounds": 2
+}
+
+### 2.3 带详细要求的论文写作
+POST http://localhost:8081/api/paper/write
+Content-Type: application/json
+
+{
+  "topic": "联邦学习在隐私保护中的应用",
+  "description": "研究联邦学习在医疗数据隐私保护中的关键技术挑战和解决方案",
+  "keywords": "联邦学习,隐私保护,医疗数据,安全聚合",
+  "sections": ["引言", "背景知识", "方法论", "实验分析", "结论"],
+  "maxReviewRounds": 3,
+  "requirements": "1. 需要引用近三年顶会论文\n2. 重点分析差分隐私和安全聚合技术\n3. 包含与其他方法的实验对比"
+}
+
+### ==================== 3. 单步研究（文献调研） ====================
+
+### 3.1 基础调研
+POST http://localhost:8081/api/paper/research
+Content-Type: application/json
+
+{
+  "topic": "Graph Neural Networks for Drug Discovery",
+  "keywords": "GNN,药物发现,分子图"
+}
+
+### 3.2 详细调研
+POST http://localhost:8081/api/paper/research
+Content-Type: application/json
+
+{
+  "topic": "强化学习在机器人控制中的应用",
+  "description": "调查基于深度强化学习的机器人操作技能学习方法",
+  "keywords": "强化学习,机器人控制,DRL,模仿学习",
+  "requirements": "重点关注2024-2026年的最新进展，对比model-based和model-free方法的优劣"
+}
+
+### ==================== 4. 单 Agent 调试接口 ====================
+
+### 4.1 调用导师 Agent — 选题评估
+POST http://localhost:8081/api/agent/SUPERVISOR/execute
+Content-Type: application/json
+
+{
+  "topic": "量子机器学习在金融风控中的应用",
+  "description": "探索量子神经网络在信用评分和欺诈检测中的潜力"
+}
+
+### 4.2 调用研究员 Agent — 文献调研
+POST http://localhost:8081/api/agent/RESEARCHER/execute
+Content-Type: application/json
+
+{
+  "topic": "边缘计算中的联邦学习优化",
+  "keywords": "边缘计算,联邦学习,通信优化",
+  "description": "研究在资源受限的边缘设备上高效执行联邦学习的方法"
+}
+
+### 4.3 调用写作 Agent — 撰写章节
+POST http://localhost:8081/api/agent/WRITER/execute
+Content-Type: application/json
+
+{
+  "topic": "对比学习在视觉表征中的应用",
+  "sections": ["引言", "方法"],
+  "description": "撰写论文引言和方法部分"
+}
+
+### 4.4 调用审稿 Agent
+POST http://localhost:8081/api/agent/REVIEWER/execute
+Content-Type: application/json
+
+{
+  "topic": "测试论文",
+  "description": "审阅论文内容"
+}
+
+### 4.5 调用润色 Agent
+POST http://localhost:8081/api/agent/POLISHER/execute
+Content-Type: application/json
+
+{
+  "topic": "测试润色",
+  "description": "润色论文语言"
+}
+
+### ==================== 5. 流式接口 ====================
+
+### 5.1 流式研究结果（SSE）
+POST http://localhost:8081/api/paper/research/stream
+Content-Type: application/json
+
+{
+  "topic": "Transformer在时间序列预测中的应用"
+}
+
+### ==================== 6. 异常场景测试 ====================
+
+### 6.1 空标题（测试参数校验）
+POST http://localhost:8081/api/paper/write
+Content-Type: application/json
+
+{
+  "topic": "",
+  "sections": ["引言"]
+}
+
+### 6.2 无效 JSON
+POST http://localhost:8081/api/paper/write
+Content-Type: application/json
+
+invalid json
+
+### 6.3 缺少必填字段
+POST http://localhost:8081/api/paper/write
+Content-Type: application/json
+
+### ==================== 7. 论文管理 CRUD（持久化后可用） ====================
+
+### 7.1 论文列表
+GET http://localhost:8081/api/paper/list
+
+### 7.2 论文详情
+GET http://localhost:8081/api/paper/1
+
+### 7.3 论文关联的 Agent 任务链路
+GET http://localhost:8081/api/paper/1/tasks
+
+### 7.4 删除论文
+DELETE http://localhost:8081/api/paper/1
+
+
+POST http://localhost:8081/api/paper/write
+Content-Type: application/json
+
+{
+  "topic": "深度学习在医疗影像分割中的应用",
+  "description": "探索基于U-Net和Transformer的医学图像分割方法",
+  "keywords": "深度学习,医疗影像,图像分割,U-Net,Transformer",
+  "sections": ["摘要", "引言", "相关工作", "方法", "实验", "结论"],
+  "maxReviewRounds": 2
+}
