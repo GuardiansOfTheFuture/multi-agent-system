@@ -13,7 +13,9 @@ import com.paperai.service.AgentTaskService;
 import com.paperai.service.OrchestratorService;
 import com.paperai.service.PaperService;
 import jakarta.annotation.Resource;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 
@@ -27,45 +29,99 @@ import java.util.Map;
  * @author: ch
  * @date 2026年05月11日
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/paper")
 public class PaperController {
 
-    @Resource
-    private ResearcherAgent researcherAgent;
+    @Resource private ResearcherAgent researcherAgent;
+    @Resource private OrchestratorService orchestratorService;
+    @Resource private PaperService paperService;
+    @Resource private AgentTaskService agentTaskService;
+    @Resource private com.paperai.service.StepEventPublisher stepEventPublisher;
 
-    @Resource
-    private OrchestratorService orchestratorService;
 
-    @Resource
-    private PaperService paperService;
-
-    @Resource
-    private AgentTaskService agentTaskService;
 
     // ===== 全流程写作 =====
 
-    @PostMapping("/write")
-    public ApiResultVO<PaperWritingVO> writePaper(@RequestBody PaperWritingRequestDTO request) {
-        PaperWritingVO result = orchestratorService.execute(request);
-        return ApiResultVO.success("论文写作完成", result);
+    @PostMapping("/create")
+    public ApiResultVO<Map<String, Object>> createPaper(
+            @RequestBody PaperWritingRequestDTO request,
+            Authentication auth) {
+        Long userId = userId(auth);
+        Paper paper = paperService.createPaper(request, userId);
+        Map<String, Object> result = new HashMap<>();
+        result.put("paperId", paper.getId());
+        result.put("topic", paper.getTitle());
+        result.put("status", paper.getStatus());
+        return ApiResultVO.success("论文已创建", result);
     }
 
-    /** SSE 流式推送 — 每完成一步推一条 StepRecordVO */
+    @PostMapping("/write/{paperId}")
+    public ApiResultVO<Map<String, Object>> startWriting(
+            @PathVariable Long paperId,
+            @RequestBody PaperWritingRequestDTO request,
+            Authentication auth) {
+        paperService.checkOwner(paperId, userId(auth));
+        Thread.startVirtualThread(() -> {
+            try {
+                orchestratorService.executeAsync(paperId, request);
+            } catch (Exception e) {
+                log.error("异步写作异常: paperId={}, {}", paperId, e.getMessage(), e);
+                stepEventPublisher.publishError(paperId, e.getMessage());
+            }
+        });
+        Map<String, Object> result = new HashMap<>();
+        result.put("paperId", paperId); result.put("status", "STARTED");
+        return ApiResultVO.success("写作任务已启动", result);
+    }
+
+    @PostMapping("/write")
+    public ApiResultVO<PaperWritingVO> writePaper(
+            @RequestBody PaperWritingRequestDTO request,
+            Authentication auth) {
+        return ApiResultVO.success(orchestratorService.execute(request, userId(auth)));
+    }
+
+    @PostMapping("/write/{paperId}/stop")
+    public ApiResultVO<Map<String, Object>> stopWriting(
+            @PathVariable Long paperId,
+            Authentication auth) {
+        paperService.checkOwner(paperId, userId(auth));
+        orchestratorService.stopTask(paperId);
+        return ApiResultVO.success("已发送停止请求", Map.of("paperId", paperId, "status", "STOPPED"));
+    }
+
     @PostMapping(value = "/write/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<PaperWritingVO.StepRecordVO> writePaperStream(@RequestBody PaperWritingRequestDTO request) {
+    public Flux<PaperWritingVO.StepRecordVO> writePaperStream(
+            @RequestBody PaperWritingRequestDTO request,
+            Authentication auth) {
         return Flux.create(sink -> {
             Thread.startVirtualThread(() -> {
                 try {
-                    orchestratorService.executeStream(request, step -> {
-                        sink.next(step);
-                    });
+                    orchestratorService.executeStream(request, step -> sink.next(step), userId(auth));
                     sink.complete();
-                } catch (Exception e) {
-                    sink.error(e);
-                }
+                } catch (Exception e) { sink.error(e); }
             });
         });
+    }
+
+    // ===== 版本管理 =====
+
+    @GetMapping("/{id}/versions")
+    public ApiResultVO<List<com.paperai.model.entity.PaperVersion>> versions(@PathVariable Long id) {
+        return ApiResultVO.success(paperService.getVersions(id));
+    }
+
+    @GetMapping("/{id}/versions/{versionNo}")
+    public ApiResultVO<com.paperai.model.entity.PaperVersion> versionDetail(
+            @PathVariable Long id, @PathVariable Integer versionNo) {
+        return ApiResultVO.success(paperService.getVersion(id, versionNo));
+    }
+
+    @GetMapping("/{id}/versions/latest")
+    public ApiResultVO<com.paperai.model.entity.PaperVersion> latestVersion(@PathVariable Long id) {
+        return ApiResultVO.success(paperService.getLatestVersion(id));
     }
 
     // ===== 单步研究 =====
@@ -84,21 +140,22 @@ public class PaperController {
     // ===== 论文管理 CRUD =====
 
     @GetMapping("/list")
-    public ApiResultVO<List<Paper>> list() {
-        return ApiResultVO.success(paperService.listAll());
+    public ApiResultVO<List<Paper>> list(Authentication auth) {
+        return ApiResultVO.success(paperService.listByUserId(userId(auth)));
     }
 
     @GetMapping("/{id}")
-    public ApiResultVO<Paper> detail(@PathVariable Long id) {
+    public ApiResultVO<Paper> detail(@PathVariable Long id, Authentication auth) {
         Paper paper = paperService.getPaperById(id);
+        paperService.checkOwner(id, userId(auth));
         return ApiResultVO.success(paper);
     }
 
     @GetMapping("/{id}/tasks")
-    public ApiResultVO<Map<String, Object>> tasks(@PathVariable Long id) {
+    public ApiResultVO<Map<String, Object>> tasks(@PathVariable Long id, Authentication auth) {
+        paperService.checkOwner(id, userId(auth));
         Paper paper = paperService.getPaperById(id);
         List<Task> tasks = agentTaskService.getTasksByPaperId(id);
-
         Map<String, Object> result = new HashMap<>();
         result.put("paper", paper);
         result.put("tasks", tasks);
@@ -106,16 +163,20 @@ public class PaperController {
     }
 
     @DeleteMapping("/{id}")
-    public ApiResultVO<Void> delete(@PathVariable Long id) {
+    public ApiResultVO<String> delete(@PathVariable Long id, Authentication auth) {
+        paperService.checkOwner(id, userId(auth));
         paperService.deletePaper(id);
-        return ApiResultVO.success("删除成功", null);
+        return ApiResultVO.success("删除成功");
     }
-
-    // ===== 健康检查 =====
 
     @GetMapping("/health")
     public ApiResultVO<String> health() {
         return ApiResultVO.success("PaperAI Backend is running");
+    }
+
+    /** 从 Authentication 提取 userId */
+    private Long userId(Authentication auth) {
+        return auth != null ? (Long) auth.getPrincipal() : 0L;
     }
 
     // ===== 转换 =====

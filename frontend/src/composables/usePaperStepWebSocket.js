@@ -6,9 +6,9 @@ import { Client } from '@stomp/stompjs'
  * 接收响应的 paperId ref，自动连接/断开
  *
  * @param {import('vue').Ref<number|null>} paperIdRef paperId 的 ref
- * @param {object} callbacks { onStep, onComplete, onError }
+ * @param {object} callbacks { onStep, onComplete, onError, onStream }
  */
-export function usePaperStepWebSocket(paperIdRef, { onStep, onComplete, onError }) {
+export function usePaperStepWebSocket(paperIdRef, { onStep, onComplete, onError, onStream }) {
   const connected = ref(false)
   let client = null
 
@@ -16,17 +16,24 @@ export function usePaperStepWebSocket(paperIdRef, { onStep, onComplete, onError 
     if (client) doDisconnect()
     if (!pid) return
 
+    const wsUrl = `ws://${window.location.hostname}:8081/ws`
+
     client = new Client({
-      brokerURL: `ws://${window.location.hostname}:8081/ws`,
-      webSocketFactory: () => new WebSocket(`ws://${window.location.hostname}:8081/ws`),
+      brokerURL: wsUrl,
       reconnectDelay: 5000,
       heartbeatIncoming: 10000,
       heartbeatOutgoing: 10000,
+      debug: (str) => console.log('[STOMP]', str),
       onConnect: () => {
         connected.value = true
 
         client.subscribe(`/topic/paper/${pid}/step`, (msg) => {
           try { onStep?.(JSON.parse(msg.body)) } catch (_) {}
+        })
+
+        // 新增：流式 token 推送
+        client.subscribe(`/topic/paper/${pid}/stream`, (msg) => {
+          try { onStream?.(JSON.parse(msg.body)) } catch (_) {}
         })
 
         client.subscribe(`/topic/paper/${pid}/complete`, () => {
@@ -38,7 +45,11 @@ export function usePaperStepWebSocket(paperIdRef, { onStep, onComplete, onError 
         })
       },
       onDisconnect: () => { connected.value = false },
-      onStompError: (frame) => { onError?.(frame.headers?.message || 'STOMP 连接失败') }
+      onStompError: (frame) => {
+        const errMsg = frame.headers?.message || 'STOMP 连接失败'
+        if (frame.headers?.message?.includes('Connection closed')) return
+        onError?.(errMsg)
+      }
     })
     client.activate()
   }

@@ -74,6 +74,11 @@ public class ReviewerAgent extends BaseAgent {
 
     @Override
     public String executeTask(String task, AgentContext context) {
+        return executeTaskStream(task, context, null);
+    }
+
+    @Override
+    public String executeTaskStream(String task, AgentContext context, java.util.function.Consumer<String> onToken) {
         this.context = context;
         this.context.updateTaskStatus(role.getCode(), TaskStatus.IN_PROGRESS);
 
@@ -82,7 +87,9 @@ public class ReviewerAgent extends BaseAgent {
 
         try {
             String contextInfo = buildReviewContext();
-            String response = callLlmWithContext(task, contextInfo);
+            String response = onToken != null
+                    ? callLlmStream(task, onToken)
+                    : callLlmWithContext(task, contextInfo);
 
             String reviewSummary = extractReviewSummary(response);
             this.context.addReviewComment(reviewSummary);

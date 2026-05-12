@@ -2,6 +2,18 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
   {
+    path: '/login',
+    name: 'Login',
+    component: () => import('@/views/Login.vue'),
+    meta: { title: '登录', noLayout: true }
+  },
+  {
+    path: '/register',
+    name: 'Register',
+    component: () => import('@/views/Register.vue'),
+    meta: { title: '注册', noLayout: true }
+  },
+  {
     path: '/',
     component: () => import('@/views/Layout.vue'),
     redirect: '/write',
@@ -37,6 +49,18 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+// 路由守卫：未登录跳转登录页
+router.beforeEach((to, from, next) => {
+  const token = localStorage.getItem('paperai_token')
+  if (to.meta.noLayout) {
+    next()
+  } else if (!token) {
+    next('/login')
+  } else {
+    next()
+  }
 })
 
 export default router

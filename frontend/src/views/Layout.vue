@@ -43,6 +43,24 @@
         <span class="header-title">{{ pageTitle }}</span>
         <div class="header-right">
           <a-tag color="blue">通义千问 qwen3.6-plus</a-tag>
+          <a-dropdown>
+            <a class="user-dropdown" @click.prevent>
+              <user-outlined style="margin-right: 4px" />
+              {{ store.user?.username || '用户' }}
+              <down-outlined />
+            </a>
+            <template #overlay>
+              <a-menu>
+                <a-menu-item key="profile" disabled>
+                  <user-outlined /> {{ store.user?.username }}
+                </a-menu-item>
+                <a-menu-divider />
+                <a-menu-item key="logout" @click="handleLogout">
+                  <logout-outlined /> 退出登录
+                </a-menu-item>
+              </a-menu>
+            </template>
+          </a-dropdown>
         </div>
       </a-layout-header>
 
@@ -60,16 +78,21 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { useUserStore } from '@/stores/user'
 import {
   EditOutlined,
   FileTextOutlined,
   RobotOutlined,
+  UserOutlined,
+  LogoutOutlined,
+  DownOutlined,
   MenuUnfoldOutlined,
   MenuFoldOutlined
 } from '@ant-design/icons-vue'
 
 const router = useRouter()
 const route = useRoute()
+const store = useUserStore()
 
 const collapsed = ref(false)
 const selectedKeys = ref(['/write'])
@@ -79,6 +102,11 @@ const pageTitle = computed(() => route.meta?.title || 'PaperAI')
 function handleMenuClick({ key }) {
   selectedKeys.value = [key]
   router.push(key)
+}
+
+function handleLogout() {
+  store.logout()
+  router.push('/login')
 }
 </script>
 

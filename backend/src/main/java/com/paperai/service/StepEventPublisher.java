@@ -18,13 +18,30 @@ public class StepEventPublisher {
 
     /**
      * 推送单个步骤事件
-     * @param paperId 论文ID（前端订阅 /topic/paper/{paperId}/step）
-     * @param step    步骤数据
      */
     public void publishStep(Long paperId, StepRecordVO step) {
         messagingTemplate.convertAndSend(
                 "/topic/paper/" + paperId + "/step",
                 step
+        );
+    }
+
+    /**
+     * 推送流式 token（逐字推送当前步骤的实时文本）
+     * @param paperId 论文ID
+     * @param stepSeq 当前步骤序号
+     * @param agentName 步骤名称
+     * @param fullText 当前累计完整文本
+     */
+    public void publishStreamToken(Long paperId, int stepSeq, String agentName, String fullText) {
+        messagingTemplate.convertAndSend(
+                "/topic/paper/" + paperId + "/stream",
+                java.util.Map.of(
+                        "stepSeq", stepSeq,
+                        "agentName", agentName,
+                        "fullText", fullText,
+                        "ts", System.currentTimeMillis()
+                )
         );
     }
 

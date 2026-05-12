@@ -62,6 +62,12 @@ public class WriterAgent extends BaseAgent {
     @Override
     public String executeTask(String task, AgentContext context) {
         this.context = context;
+        return executeTaskStream(task, context, null);
+    }
+
+    @Override
+    public String executeTaskStream(String task, AgentContext context, java.util.function.Consumer<String> onToken) {
+        this.context = context;
         this.context.updateTaskStatus(role.getCode(), TaskStatus.IN_PROGRESS);
 
         long startTime = System.currentTimeMillis();
@@ -69,7 +75,9 @@ public class WriterAgent extends BaseAgent {
 
         try {
             String contextInfo = buildContextInfo();
-            String response = callLlmWithContext(task, contextInfo);
+            String response = onToken != null
+                    ? callLlmStream(task, onToken)
+                    : callLlmWithContext(task, contextInfo);
 
             String sectionTitle = extractSectionTitle(task, response);
             if (sectionTitle != null) {

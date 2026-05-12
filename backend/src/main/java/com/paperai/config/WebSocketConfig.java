@@ -20,7 +20,10 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
-        // WebSocket 连接端点
+        // WebSocket 连接端点 — 支持原生 WebSocket 和 SockJS 双协议
+        registry.addEndpoint("/ws")
+                .setAllowedOriginPatterns("*");
+        // 额外注册一个 SockJS 端点给不支持原生 WebSocket 的客户端
         registry.addEndpoint("/ws")
                 .setAllowedOriginPatterns("*")
                 .withSockJS();

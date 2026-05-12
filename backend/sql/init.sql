@@ -10,18 +10,33 @@ USE paper_ai;
 
 -- 论文表
 CREATE TABLE IF NOT EXISTS paper (
-    id           BIGINT       AUTO_INCREMENT PRIMARY KEY COMMENT '论文ID',
-    title        VARCHAR(300) NOT NULL              COMMENT '论文标题',
-    abstract_text TEXT                               COMMENT '摘要',
-    keywords     VARCHAR(500)                       COMMENT '关键词',
-    description  TEXT                               COMMENT '研究方向描述',
-    status       VARCHAR(20)  NOT NULL DEFAULT 'DRAFT' COMMENT '状态: DRAFT/REVIEWING/PUBLISHED',
-    content      LONGTEXT                           COMMENT '最终内容',
-    created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    id               BIGINT       AUTO_INCREMENT PRIMARY KEY COMMENT '论文ID',
+    title            VARCHAR(300) NOT NULL              COMMENT '论文标题',
+    abstract_text    TEXT                               COMMENT '摘要',
+    keywords         VARCHAR(500)                       COMMENT '关键词',
+    description      TEXT                               COMMENT '研究方向描述',
+    status           VARCHAR(20)  NOT NULL DEFAULT 'DRAFT' COMMENT '状态: DRAFT/REVIEWING/PUBLISHED',
+    content          LONGTEXT                           COMMENT '最终内容',
+    current_version  INT          NOT NULL DEFAULT 0    COMMENT '当前最新版本号',
+    created_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     INDEX idx_status (status),
     INDEX idx_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='论文';
+
+-- 论文版本表
+CREATE TABLE IF NOT EXISTS paper_version (
+    id           BIGINT       AUTO_INCREMENT PRIMARY KEY COMMENT '版本ID',
+    paper_id     BIGINT       NOT NULL              COMMENT '所属论文ID',
+    version_no   INT          NOT NULL              COMMENT '版本号',
+    stage        VARCHAR(20)  NOT NULL DEFAULT 'DRAFT' COMMENT '阶段: DRAFT/REVIEWED/POLISHED/FINAL',
+    summary      VARCHAR(500)                       COMMENT '版本摘要',
+    content      MEDIUMTEXT                         COMMENT '论文全文(Markdown)',
+    word_count   INT          DEFAULT 0             COMMENT '字数统计',
+    created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    INDEX idx_paper_version (paper_id, version_no),
+    INDEX idx_paper_stage (paper_id, stage)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='论文版本';
 
 -- Agent 任务表
 CREATE TABLE IF NOT EXISTS task (

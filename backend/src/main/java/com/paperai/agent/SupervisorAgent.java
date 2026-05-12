@@ -71,6 +71,11 @@ public class SupervisorAgent extends BaseAgent {
 
     @Override
     public String executeTask(String task, AgentContext context) {
+        return executeTaskStream(task, context, null);
+    }
+
+    @Override
+    public String executeTaskStream(String task, AgentContext context, java.util.function.Consumer<String> onToken) {
         this.context = context;
         this.context.updateTaskStatus(role.getCode(), TaskStatus.IN_PROGRESS);
 
@@ -79,7 +84,9 @@ public class SupervisorAgent extends BaseAgent {
 
         try {
             String contextInfo = buildSupervisionContext();
-            String response = callLlmWithContext(task, contextInfo);
+            String response = onToken != null
+                    ? callLlmStream(task, onToken)  // TODO: callLlmStream 不支持带extraContext，先用同步
+                    : callLlmWithContext(task, contextInfo);
 
             this.context.updateTaskStatus(role.getCode(), TaskStatus.COMPLETED);
             broadcast(AgentMessageType.COORDINATION, "导师已完成审阅指导");

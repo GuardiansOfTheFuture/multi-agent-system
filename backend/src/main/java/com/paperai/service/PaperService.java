@@ -1,46 +1,34 @@
 package com.paperai.service;
 
 import com.paperai.model.entity.Paper;
+import com.paperai.model.entity.PaperVersion;
 import com.paperai.model.dto.PaperWritingRequestDTO;
-import com.paperai.model.vo.PaperWritingVO;
 
 import java.util.List;
 
-/**
- * 论文服务接口
- *
- * @author: ch
- * @date 2026年05月11日
- */
 public interface PaperService {
 
-    /**
-     * 创建论文记录
-     */
-    Paper createPaper(PaperWritingRequestDTO request);
+    Paper createPaper(PaperWritingRequestDTO request, Long userId);
 
-    /**
-     * 根据ID查询论文
-     */
     Paper getPaperById(Long id);
 
-    /**
-     * 查询所有论文列表
-     */
     List<Paper> listAll();
 
-    /**
-     * 更新论文内容
-     */
+    List<Paper> listByUserId(Long userId);
+
+    void checkOwner(Long paperId, Long userId);
+
     void updateContent(Long id, String content);
 
-    /**
-     * 更新论文状态
-     */
     void updateStatus(Long id, String status);
 
-    /**
-     * 删除论文
-     */
     void deletePaper(Long id);
+
+    PaperVersion saveVersion(Long paperId, String stage, String summary, String content);
+
+    List<PaperVersion> getVersions(Long paperId);
+
+    PaperVersion getVersion(Long paperId, Integer versionNo);
+
+    PaperVersion getLatestVersion(Long paperId);
 }

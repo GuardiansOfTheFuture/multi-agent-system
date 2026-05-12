@@ -80,6 +80,11 @@ public class ResearcherAgent extends BaseAgent {
 
     @Override
     public String executeTask(String task, AgentContext context) {
+        return executeTaskStream(task, context, null);
+    }
+
+    @Override
+    public String executeTaskStream(String task, AgentContext context, java.util.function.Consumer<String> onToken) {
         this.context = context;
         this.context.updateTaskStatus(role.getCode(), TaskStatus.IN_PROGRESS);
 
@@ -87,17 +92,14 @@ public class ResearcherAgent extends BaseAgent {
         log.info("[{}] 开始执行任务: {}", role.getDisplayName(), task);
 
         try {
-            // 获取上下文信息
             String contextInfo = buildContextInfo();
+            String response = onToken != null
+                    ? callLlmStream(task, onToken)
+                    : callLlmWithContext(task, contextInfo);
 
-            // 调用 LLM
-            String response = callLlmWithContext(task, contextInfo);
-
-            // 更新上下文
             this.context.setResearchOutput(response);
             this.context.updateTaskStatus(role.getCode(), TaskStatus.COMPLETED);
 
-            // 广播完成消息
             broadcast(AgentMessageType.TASK_RESULT,
                     "研究员已完成研究任务，主题: " + this.context.getTopic());
 

@@ -13,205 +13,198 @@ import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * 编排引擎 — 将 5 个 Agent 串成完整论文写作流程。
- * 每步执行结果持久化到 paper / task 表。
- *
- * @author: ch
- * @date 2026年05月11日
+ * 每步通过 WebSocket STOMP 逐 token 流式推送到前端。
  */
 @Slf4j
 @Service
 public class OrchestratorService {
 
-    @Resource
-    private SupervisorAgent supervisorAgent;
+    @Resource private SupervisorAgent supervisorAgent;
+    @Resource private ResearcherAgent researcherAgent;
+    @Resource private WriterAgent writerAgent;
+    @Resource private ReviewerAgent reviewerAgent;
+    @Resource private PolisherAgent polisherAgent;
+    @Resource private PaperService paperService;
+    @Resource private AgentTaskService agentTaskService;
+    @Resource private StepEventPublisher stepEventPublisher;
 
-    @Resource
-    private ResearcherAgent researcherAgent;
-
-    @Resource
-    private WriterAgent writerAgent;
-
-    @Resource
-    private ReviewerAgent reviewerAgent;
-
-    @Resource
-    private PolisherAgent polisherAgent;
-
-    @Resource
-    private PaperService paperService;
-
-    @Resource
-    private AgentTaskService agentTaskService;
-
-    @Resource
-    private StepEventPublisher stepEventPublisher;
-
-    /** 步骤计数器 */
     private int stepSeq = 0;
-
-    /** SSE 回调（非 null 时每步推事件） */
     private Consumer<PaperWritingVO.StepRecordVO> stepCallback = null;
 
-    /**
-     * 执行完整论文写作流程（同步，返回最终 VO）
-     */
-    public PaperWritingVO execute(PaperWritingRequestDTO request) {
+    /** 运行中的任务：paperId → 中断标记 */
+    private final java.util.concurrent.ConcurrentHashMap<Long, Boolean> runningTasks = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 停止指定 paperId 的写作任务 */
+    public void stopTask(Long paperId) {
+        runningTasks.put(paperId, true);
+        log.info("收到停止请求 paperId={}", paperId);
+    }
+
+    public boolean isRunning(Long paperId) {
+        return runningTasks.containsKey(paperId) && !runningTasks.get(paperId);
+    }
+
+    /** 同步执行 */
+    public PaperWritingVO execute(PaperWritingRequestDTO req) {
+        return execute(req, null);
+    }
+
+    public PaperWritingVO execute(PaperWritingRequestDTO req, Long userId) {
         this.stepCallback = null;
-        return doExecute(request);
+        return doExecute(req, userId);
     }
 
-    /**
-     * 执行完整论文写作流程（SSE 流式，每步通过 callback 推送）
-     */
-    public void executeStream(PaperWritingRequestDTO request, Consumer<PaperWritingVO.StepRecordVO> callback) {
-        this.stepCallback = callback;
-        doExecute(request);
+    /** SSE 流式执行 */
+    public void executeStream(PaperWritingRequestDTO req, Consumer<PaperWritingVO.StepRecordVO> cb) {
+        executeStream(req, cb, null);
     }
 
-    private PaperWritingVO doExecute(PaperWritingRequestDTO request) {
-        long startTime = System.currentTimeMillis();
+    public void executeStream(PaperWritingRequestDTO req, Consumer<PaperWritingVO.StepRecordVO> cb, Long userId) {
+        this.stepCallback = cb;
+        doExecute(req, userId);
+    }
 
-        // 1. 先创建论文记录
-        Paper paper = paperService.createPaper(request);
-        Long paperId = paper.getId();
-        log.info("论文记录已创建: id={}", paperId);
-
-        AgentContext context = new AgentContext(UUID.randomUUID().toString(), request.getTopic());
+    /** 异步执行（WebSocket 实时推送） */
+    public void executeAsync(Long paperId, PaperWritingRequestDTO req) {
+        this.stepCallback = null;
+        this.stepSeq = 0;
+        runningTasks.put(paperId, false); // 标记运行中
+        AgentContext ctx = new AgentContext(UUID.randomUUID().toString(), req.getTopic());
         List<PaperWritingVO.StepRecordVO> steps = new ArrayList<>();
+        long start = System.currentTimeMillis();
 
-        log.info("===== 论文写作流程开始 =====");
-        log.info("主题: {}, paperId={}", request.getTopic(), paperId);
-
+        log.info("===== 异步写作开始 paperId={} =====", paperId);
         try {
-            // ===== Step 1: 选题评估 =====
-            step(paperId, "选题评估", AgentRole.SUPERVISOR, steps, () -> {
-                context.setAttribute("direction", request.getDescription());
-                return supervisorAgent.evaluateTopic(request.getTopic(), request.getDescription());
-            });
-
-            // ===== Step 2: 文献调研 =====
-            step(paperId, "文献调研", AgentRole.RESEARCHER, steps, () -> {
-                String taskDesc = "研究主题：" + request.getTopic();
-                if (request.getKeywords() != null) taskDesc += "\n关键词：" + request.getKeywords();
-                if (request.getRequirements() != null) taskDesc += "\n要求：" + request.getRequirements();
-                return researcherAgent.executeTask(taskDesc, context);
-            });
-
-            // ===== Step 3: 导师审阅大纲 =====
-            step(paperId, "大纲审阅", AgentRole.SUPERVISOR, steps, () -> {
-                String outline = generateOutline(context, request);
-                context.setOutline(outline);
-                return supervisorAgent.reviewOutline(context);
-            });
-
-            // ===== Step 4: 写手撰写全文 =====
-            step(paperId, "全文撰写", AgentRole.WRITER, steps, () -> {
-                List<String> sections = request.getSections();
-                if (sections == null || sections.isEmpty()) {
-                    sections = parseSectionsFromOutline(context.getOutline());
-                }
-                for (String section : sections) {
-                    String taskDesc = "请撰写论文的【" + section + "】章节。\n基于已有大纲和研究材料展开。";
-                    writerAgent.executeTask(taskDesc, context);
-                }
-                return "完成 " + sections.size() + " 个章节的撰写";
-            });
-
-            // ===== Step 5: 审稿 + 迭代修改 =====
-            int maxRounds = request.getMaxReviewRounds() != null ? request.getMaxReviewRounds() : 3;
-            for (int round = 1; round <= maxRounds; round++) {
-                step(paperId, "审稿迭代#" + round, AgentRole.REVIEWER, steps, () -> {
-                    String review = reviewerAgent.reviewFullPaper(context);
-                    context.addReviewComment(review);
-                    return review;
-                });
-
-                String lastReview = getLastReview(steps);
-                if (lastReview != null && !lastReview.contains("严重问题")) {
-                    log.info("审稿无严重问题，结束迭代");
-                    break;
-                }
-
-                if (round < maxRounds) {
-                    step(paperId, "修改#" + round, AgentRole.WRITER, steps, () -> {
-                        return writerAgent.executeTask(
-                                "请根据审稿意见修改论文，解决提出的问题。\n审稿意见：" + lastReview,
-                                context
-                        );
-                    });
-                }
-            }
-
-            // ===== Step 6: 润色定稿 =====
-            step(paperId, "润色定稿", AgentRole.POLISHER, steps, () -> {
-                return polisherAgent.polishFullPaper(context);
-            });
-
-            // ===== Step 7: 最终审核 =====
-            step(paperId, "最终审核", AgentRole.SUPERVISOR, steps, () -> {
-                return supervisorAgent.finalReview(context);
-            });
-
-            // 构建最终稿 → 写回数据库
-            String finalDraft = buildFinalDraft(context);
-            context.setFinalDraft(finalDraft);
-            paperService.updateContent(paperId, finalDraft);
-            paperService.updateStatus(paperId, Constants.PAPER_STATUS_COMPLETED);
-
-            long totalTime = System.currentTimeMillis() - startTime;
-            log.info("===== 论文写作流程完成，总耗时 {}ms =====", totalTime);
-
-            return toWritingVO(paperId, context, steps, totalTime, finalDraft);
-
+            paperService.getPaperById(paperId);
+            runSteps(paperId, ctx, req, steps);
+            finish(paperId, ctx, start, null);
         } catch (Exception e) {
-            log.error("论文写作流程异常中断: {}", e.getMessage(), e);
-            paperService.updateStatus(paperId, Constants.PAPER_STATUS_FAILED);
-            long totalTime = System.currentTimeMillis() - startTime;
-            return toWritingVO(paperId, context, steps, totalTime, null);
+            if (runningTasks.getOrDefault(paperId, false)) {
+                log.info("任务被用户停止 paperId={}", paperId);
+                stepEventPublisher.publishError(paperId, "任务已被停止");
+            } else {
+                log.error("异步写作异常 paperId={}: {}", paperId, e.getMessage(), e);
+                paperService.updateStatus(paperId, Constants.PAPER_STATUS_FAILED);
+                stepEventPublisher.publishError(paperId, e.getMessage());
+            }
+        } finally {
+            runningTasks.remove(paperId);
         }
     }
 
-    /**
-     * 执行单个步骤（含数据库持久化）
-     */
-    private void step(Long paperId, String name, AgentRole role,
-                        List<PaperWritingVO.StepRecordVO> steps, StepExecutor executor) {
-        long t = System.currentTimeMillis();
-        stepSeq++;
-
-        // ① 写入 task 表（PENDING）
-        Task task = agentTaskService.createTask(paperId, role.getCode(), /* sortOrder 由 DB 自增 */ null, name);
-        Long taskId = task.getId();
-
-        log.info("→ Step#{}: [{}] {} 开始... taskId={}", stepSeq, role.getDisplayName(), name, taskId);
-        agentTaskService.updateStatus(taskId, TaskStatus.IN_PROGRESS);
+    private PaperWritingVO doExecute(PaperWritingRequestDTO req, Long userId) {
+        this.stepSeq = 0;
+        long start = System.currentTimeMillis();
+        Paper paper = paperService.createPaper(req, userId != null ? userId : 0L);
+        Long paperId = paper.getId();
+        AgentContext ctx = new AgentContext(UUID.randomUUID().toString(), req.getTopic());
+        List<PaperWritingVO.StepRecordVO> steps = new ArrayList<>();
 
         try {
-            String result = executor.execute();
+            runSteps(paperId, ctx, req, steps);
+            return finish(paperId, ctx, start, steps);
+        } catch (Exception e) {
+            paperService.updateStatus(paperId, Constants.PAPER_STATUS_FAILED);
+            return toWritingVO(paperId, ctx, steps, System.currentTimeMillis() - start, null);
+        }
+    }
+
+    /** 执行 7 步流程 */
+    private void runSteps(Long paperId, AgentContext ctx, PaperWritingRequestDTO req,
+                          List<PaperWritingVO.StepRecordVO> steps) {
+        ctx.setAttribute("direction", req.getDescription());
+        step(paperId, "选题评估", AgentRole.SUPERVISOR, steps, supervisorAgent, ctx,
+                () -> supervisorAgent.evaluateTopic(req.getTopic(), req.getDescription()));
+
+        step(paperId, "文献调研", AgentRole.RESEARCHER, steps, researcherAgent, ctx, () -> {
+            String d = "研究主题：" + req.getTopic();
+            if (req.getKeywords() != null) d += "\n关键词：" + req.getKeywords();
+            if (req.getRequirements() != null) d += "\n要求：" + req.getRequirements();
+            return d;
+        });
+
+        String outline = generateOutline(ctx, req);
+        ctx.setOutline(outline);
+        step(paperId, "大纲审阅", AgentRole.SUPERVISOR, steps, supervisorAgent, ctx,
+                () -> supervisorAgent.reviewOutline(ctx));
+
+        List<String> sections = req.getSections();
+        if (sections == null || sections.isEmpty()) sections = parseSections(outline);
+        for (String sec : sections)
+            step(paperId, sec, AgentRole.WRITER, steps, writerAgent, ctx,
+                    () -> "请撰写论文的【" + sec + "】章节。\n基于已有大纲和研究材料展开。");
+
+        int maxR = req.getMaxReviewRounds() != null ? req.getMaxReviewRounds() : 3;
+        for (int r = 1; r <= maxR; r++) {
+            step(paperId, "审稿迭代#" + r, AgentRole.REVIEWER, steps, reviewerAgent, ctx,
+                    () -> reviewerAgent.reviewFullPaper(ctx));
+            String lr = getLastReview(steps);
+            if (lr != null && !lr.contains("严重问题")) break;
+            if (r < maxR) step(paperId, "修改#" + r, AgentRole.WRITER, steps, writerAgent, ctx,
+                    () -> "请根据审稿意见修改：" + lr);
+        }
+
+        step(paperId, "润色定稿", AgentRole.POLISHER, steps, polisherAgent, ctx,
+                () -> polisherAgent.polishFullPaper(ctx));
+        step(paperId, "最终审核", AgentRole.SUPERVISOR, steps, supervisorAgent, ctx,
+                () -> supervisorAgent.finalReview(ctx));
+    }
+
+    private PaperWritingVO finish(Long paperId, AgentContext ctx, long start,
+                                  List<PaperWritingVO.StepRecordVO> steps) {
+        String draft = buildFinalDraft(ctx);
+        ctx.setFinalDraft(draft);
+        paperService.updateContent(paperId, draft);
+
+        // 保存终稿版本
+        paperService.saveVersion(paperId, "FINAL", "论文终稿", draft);
+
+        paperService.updateStatus(paperId, Constants.PAPER_STATUS_COMPLETED);
+        long total = System.currentTimeMillis() - start;
+        log.info("===== 写作完成 paperId={}，总耗时 {}ms =====", paperId, total);
+        stepEventPublisher.publishComplete(paperId);
+        return steps != null ? toWritingVO(paperId, ctx, steps, total, draft) : null;
+    }
+
+    /** 核心步骤：流式推送 + DB 持久化 */
+    private String step(Long paperId, String name, AgentRole role,
+                        List<PaperWritingVO.StepRecordVO> steps,
+                        BaseAgent agent, AgentContext ctx,
+                        Supplier<String> taskSupplier) {
+        // 检查是否被停止
+        if (runningTasks.getOrDefault(paperId, false)) {
+            throw new RuntimeException("任务已被用户停止");
+        }
+        long t = System.currentTimeMillis();
+        stepSeq++;
+        final int seq = stepSeq;
+
+        Task task = agentTaskService.createTask(paperId, role.getCode(), null, name);
+        agentTaskService.updateStatus(task.getId(), TaskStatus.IN_PROGRESS);
+        log.info("→ Step#{}: [{}] {} 开始...", seq, role.getDisplayName(), name);
+        stepEventPublisher.publishStreamToken(paperId, seq, name, "");
+
+        try {
+            String result = agent.executeTaskStream(taskSupplier.get(), ctx,
+                    full -> stepEventPublisher.publishStreamToken(paperId, seq, name, full));
             long elapsed = System.currentTimeMillis() - t;
-
-            // ② 更新 task 表（COMPLETED + 输出）
-            agentTaskService.updateOutput(taskId, result, elapsed);
+            agentTaskService.updateOutput(task.getId(), result, elapsed);
             log.info("  ✓ [{}] {} 完成 ({}ms)", role.getDisplayName(), name, elapsed);
-
             addStep(paperId, steps, name, role, TaskStatus.COMPLETED, elapsed, truncate(result, 100), result);
-
+            return result;
         } catch (Exception e) {
             long elapsed = System.currentTimeMillis() - t;
             log.error("  ✗ [{}] {} 失败: {}", role.getDisplayName(), name, e.getMessage());
-
-            // ③ 更新 task 表（FAILED）
-            agentTaskService.updateOutput(taskId, e.getMessage(), elapsed);
-            agentTaskService.updateStatus(taskId, TaskStatus.FAILED);
-
+            agentTaskService.updateOutput(task.getId(), e.getMessage(), elapsed);
+            agentTaskService.updateStatus(task.getId(), TaskStatus.FAILED);
             addStep(paperId, steps, name, role, TaskStatus.FAILED, elapsed, e.getMessage(), e.getMessage());
             throw e;
         }
@@ -220,98 +213,64 @@ public class OrchestratorService {
     private void addStep(Long paperId, List<PaperWritingVO.StepRecordVO> steps, String name, AgentRole role,
                          TaskStatus status, long ms, String summary, String fullOutput) {
         PaperWritingVO.StepRecordVO s = new PaperWritingVO.StepRecordVO();
-        s.setAgentName(name);
-        s.setAgentRole(role);
-        s.setStatus(status);
-        s.setDurationMs(ms);
-        s.setSummary(summary);
-        s.setFullOutput(fullOutput);
+        s.setAgentName(name); s.setAgentRole(role); s.setStatus(status);
+        s.setDurationMs(ms); s.setSummary(summary); s.setFullOutput(fullOutput);
         steps.add(s);
-        // ① 如果有 SSE 回调，立即推送
-        if (stepCallback != null) {
-            stepCallback.accept(s);
-        }
-        // ② WebSocket STOMP 广播
-        if (stepEventPublisher != null) {
-            stepEventPublisher.publishStep(paperId, s);
-        }
+        if (stepCallback != null) stepCallback.accept(s);
+        if (stepEventPublisher != null) stepEventPublisher.publishStep(paperId, s);
     }
 
-    @FunctionalInterface
-    private interface StepExecutor {
-        String execute();
-    }
-
-    /**
-     * 简单生成大纲（后续可抽成 Agent 调用）
-     */
+    // ========== 辅助 ==========
     private String generateOutline(AgentContext ctx, PaperWritingRequestDTO req) {
-        List<String> sections = req.getSections();
-        if (sections != null && !sections.isEmpty()) {
+        List<String> secs = req.getSections();
+        if (secs != null && !secs.isEmpty()) {
             StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < sections.size(); i++) {
-                sb.append(i + 1).append(". ").append(sections.get(i)).append("\n");
-            }
+            for (int i = 0; i < secs.size(); i++) sb.append(i + 1).append(". ").append(secs.get(i)).append("\n");
             return sb.toString();
         }
         return "1. 引言\n2. 相关工作\n3. 方法\n4. 实验\n5. 结论";
     }
 
-    private List<String> parseSectionsFromOutline(String outline) {
-        List<String> sections = new ArrayList<>();
+    private List<String> parseSections(String outline) {
         if (outline == null) return List.of("引言", "相关工作", "方法", "实验", "结论");
+        List<String> list = new ArrayList<>();
         for (String line : outline.split("\n")) {
             String s = line.replaceAll("^\\d+[.、]\\s*", "").trim();
-            if (!s.isEmpty()) sections.add(s);
+            if (!s.isEmpty()) list.add(s);
         }
-        return sections.isEmpty() ? List.of("引言", "相关工作", "方法", "实验", "结论") : sections;
+        return list.isEmpty() ? List.of("引言", "相关工作", "方法", "实验", "结论") : list;
     }
 
     private String getLastReview(List<PaperWritingVO.StepRecordVO> steps) {
-        for (int i = steps.size() - 1; i >= 0; i--) {
-            if (steps.get(i).getAgentRole() == AgentRole.REVIEWER) {
-                return steps.get(i).getSummary();
-            }
-        }
+        for (int i = steps.size() - 1; i >= 0; i--)
+            if (steps.get(i).getAgentRole() == AgentRole.REVIEWER) return steps.get(i).getSummary();
         return null;
     }
 
     private String buildFinalDraft(AgentContext ctx) {
         StringBuilder sb = new StringBuilder();
         sb.append("# ").append(ctx.getTopic()).append("\n\n");
-        if (ctx.getAbstractText() != null) {
-            sb.append("## 摘要\n").append(ctx.getAbstractText()).append("\n\n");
-        }
-        ctx.getSections().forEach((title, content) -> {
-            sb.append("## ").append(title).append("\n").append(content).append("\n\n");
-        });
+        if (ctx.getAbstractText() != null) sb.append("## 摘要\n").append(ctx.getAbstractText()).append("\n\n");
+        ctx.getSections().forEach((t, c) -> sb.append("## ").append(t).append("\n").append(c).append("\n\n"));
         return sb.toString();
     }
 
     private PaperWritingVO toWritingVO(Long paperId, AgentContext ctx, List<PaperWritingVO.StepRecordVO> steps,
                                        long totalMs, String finalDraft) {
         PaperWritingVO vo = new PaperWritingVO();
-        vo.setContextId(ctx.getContextId());
-        vo.setPaperId(paperId);
-        vo.setTopic(ctx.getTopic());
-        vo.setFinalDraft(finalDraft);
-        vo.setAbstractText(ctx.getAbstractText());
+        vo.setContextId(ctx.getContextId()); vo.setPaperId(paperId); vo.setTopic(ctx.getTopic());
+        vo.setFinalDraft(finalDraft); vo.setAbstractText(ctx.getAbstractText());
         vo.setSections(ctx.getSections().entrySet().stream().map(e -> {
-            PaperWritingVO.SectionVO s = new PaperWritingVO.SectionVO();
-            s.setTitle(e.getKey());
-            s.setLength(e.getValue().length());
-            return s;
+            PaperWritingVO.SectionVO sv = new PaperWritingVO.SectionVO();
+            sv.setTitle(e.getKey()); sv.setLength(e.getValue().length()); return sv;
         }).toList());
-        vo.setReviewComments(ctx.getReviewComments());
-        vo.setSteps(steps);
+        vo.setReviewComments(ctx.getReviewComments()); vo.setSteps(steps);
         vo.setStatus(ctx.isAllTasksCompleted() ? "COMPLETED" : "PARTIAL");
-        vo.setTotalDurationMs(totalMs);
-        vo.setCreatedAt(ctx.getCreatedAt());
+        vo.setTotalDurationMs(totalMs); vo.setCreatedAt(ctx.getCreatedAt());
         return vo;
     }
 
     private String truncate(String s, int max) {
-        if (s == null) return "";
-        return s.length() > max ? s.substring(0, max) + "..." : s;
+        return s == null ? "" : s.length() > max ? s.substring(0, max) + "..." : s;
     }
 }

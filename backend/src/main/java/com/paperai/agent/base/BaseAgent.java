@@ -53,7 +53,22 @@ public abstract class BaseAgent {
     public abstract String executeTask(String task, AgentContext context);
 
     /**
-     * 与 LLM 对话（同步）
+     * 执行任务（流式版本）— 默认实现走同步 callLlm。
+     * 子类可重写以支持逐 token 回调。
+     *
+     * @param task     任务描述
+     * @param context  共享上下文
+     * @param onToken  每个 token 的回调
+     * @return 最终完整结果
+     */
+    public String executeTaskStream(String task, AgentContext context, java.util.function.Consumer<String> onToken) {
+        // 默认实现：用流式调用 LLM
+        this.context = context;
+        return callLlmStream(task, onToken);
+    }
+
+    /**
+     * 与 LLM 对话（同步，一次性返回完整结果）
      * 请求/响应详情由 LoggerAdvisor 统一记录，此处只记 Agent 层面的启动和完成
      */
     protected String callLlm(String userMessage) {
@@ -67,6 +82,32 @@ public abstract class BaseAgent {
                 response != null ? response.length() : 0);
 
         return response;
+    }
+
+    /**
+     * 与 LLM 流式对话 — 逐 token 回调，适用于实时展示
+     *
+     * @param userMessage 用户消息
+     * @param onToken     每个 token 的回调（传入累计到当前的完整文本）
+     * @return 最终的完整响应
+     */
+    protected String callLlmStream(String userMessage, java.util.function.Consumer<String> onToken) {
+        StringBuilder full = new StringBuilder();
+
+        String response = chatClient.prompt()
+                .system(getSystemPrompt())
+                .user(userMessage)
+                .stream()
+                .content()
+                .doOnNext(chunk -> {
+                    full.append(chunk);
+                    onToken.accept(full.toString());
+                })
+                .blockLast(); // 等待流结束，返回最后一片
+
+        String result = full.toString();
+        log.info("[{}] LLM 流式响应完成，长度: {}", role.getDisplayName(), result.length());
+        return result;
     }
 
     /**
