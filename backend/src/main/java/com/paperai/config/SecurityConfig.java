@@ -38,7 +38,8 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(
                     "/api/auth/**",
-                    "/api/paper/health"
+                    "/api/paper/health",
+                    "/api/paper/write/*/stream"
                 ).permitAll()
                 .anyRequest().authenticated()
             )

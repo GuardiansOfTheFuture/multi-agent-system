@@ -6,7 +6,23 @@
     <header class="flow-toolbar">
       <div class="toolbar-left">
         <span class="toolbar-title gradient-text">⚡ 流程画布</span>
-        <a-switch v-model:checked="isEditMode" checked-children="编辑" un-children="只读" />
+        <a-select
+          v-model:value="currentFlowId"
+          :options="flowSelectOptions"
+          style="width: 220px"
+          class="flow-select"
+          placeholder="选择流程..."
+          @change="onFlowSelect"
+        >
+          <template #option="{ value, label, category, source }">
+            <div style="display:flex;align-items:center;gap:6px">
+              <span>{{ label }}</span>
+              <a-tag v-if="source === 'preset'" color="purple" size="small" style="font-size:9px">预设</a-tag>
+              <a-tag v-else color="blue" size="small" style="font-size:9px">我的</a-tag>
+            </div>
+          </template>
+        </a-select>
+        <a-switch v-model:checked="isEditMode" checked-children="编辑" un-children="只读" size="small" />
         <span class="toolbar-stats">
           <span class="stat-item">{{ nodes.length }} 节点</span>
           <span class="stat-sep">·</span>
@@ -14,15 +30,18 @@
         </span>
       </div>
       <div class="toolbar-center">
-        <a-space :size="8">
-          <a-button size="small" :disabled="!canUndo" @click="undo">↩ 撤销</a-button>
-          <a-button size="small" :disabled="!canRedo" @click="redo">↪ 重做</a-button>
+        <a-space :size="6">
+          <a-button size="small" :disabled="!canUndo" @click="undo" title="撤销">↩</a-button>
+          <a-button size="small" :disabled="!canRedo" @click="redo" title="重做">↪</a-button>
+          <a-divider type="vertical" style="border-color:rgba(255,255,255,0.1);height:20px" />
+          <a-button size="small" @click="handleNewFlow">➕ 新建</a-button>
+          <a-button size="small" @click="handleSaveFlow" v-if="isEditMode">💾 保存</a-button>
+          <a-button size="small" @click="handleSaveAsFlow" v-if="isEditMode">📋 另存为</a-button>
+          <a-button size="small" danger @click="handleDeleteFlow" v-if="flowSource === 'custom' && flowDbId">🗑</a-button>
           <a-divider type="vertical" style="border-color:rgba(255,255,255,0.1);height:20px" />
           <a-button size="small" @click="validateFlow">✅ 校验</a-button>
-          <a-button size="small" type="primary" @click="startExecution" :disabled="isExecuting">
-            ▶ 执行
-          </a-button>
-          <a-button v-if="isExecuting" size="small" danger @click="stopExecution">⏹ 停止</a-button>
+          <a-button size="small" type="primary" @click="startExecution" :disabled="isExecuting">▶ 执行</a-button>
+          <a-button v-if="isExecuting" size="small" danger @click="stopExecution">⏹</a-button>
         </a-space>
       </div>
       <div class="toolbar-right">
@@ -33,6 +52,13 @@
         </div>
       </div>
     </header>
+
+    <!-- 执行状态栏 -->
+    <div v-if="isExecuting" class="exec-bar">
+      <span class="exec-bar-dot" />
+      <span>执行中 — {{ execStatusText }}</span>
+      <span class="exec-bar-hint">节点实时染色中</span>
+    </div>
 
     <!-- ===== 主体 ===== -->
     <div class="flow-body">
@@ -87,6 +113,7 @@
           :connection-line-style="{ stroke: 'rgba(146,84,222,0.5)', strokeWidth: 2 }"
           fit-view-on-init
           @node-click="onNodeClick"
+          @node-double-click="onNodeClick"
           @pane-click="onPaneClick"
           @connect="onConnect"
           @edge-click="onEdgeClick"
@@ -109,11 +136,24 @@
             <a-form-item label="节点名称">
               <a-input v-model:value="editingLabel" size="small" @change="applyEdit" />
             </a-form-item>
-            <a-form-item label="Agent 角色">
+            <a-form-item label="Agent 角色" v-if="selectedNode.type !== 'paper'">
               <a-select v-model:value="editingRole" size="small" :options="roleOptions" @change="applyEdit" />
             </a-form-item>
+            <!-- 论文节点 → 选择已创建的论文任务 -->
+            <a-form-item label="关联论文任务" v-if="selectedNode.type === 'paper'">
+              <a-select
+                v-model:value="editingPaperId"
+                size="small"
+                placeholder="选择待执行的论文"
+                @change="applyPaperSelect"
+              >
+                <a-select-option v-for="p in canvasPaperTasks" :key="p.id" :value="p.id">
+                  {{ p.title }}
+                </a-select-option>
+              </a-select>
+            </a-form-item>
             <a-divider style="margin:8px 0;border-color:rgba(255,255,255,0.06)" />
-            <a-form-item label="System Prompt">
+            <a-form-item label="System Prompt" v-if="selectedNode.type !== 'paper'">
               <a-textarea v-model:value="editingPrompt" :rows="4" size="small" @change="applyEdit" placeholder="自定义该节点的提示词..." />
             </a-form-item>
             <a-form-item label="模型">
@@ -172,10 +212,12 @@
       :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
     >
       <template v-if="contextMenu.type === 'node'">
-        <div class="ctx-item" @click="deleteNode(contextMenu.target)">🗑 删除节点</div>
-        <div class="ctx-item" @click="duplicateNode(contextMenu.target)">📋 复制节点</div>
+        <div class="ctx-item" @click="configureNode(contextMenu.target)" style="color:#b37feb">⚙ 配置节点</div>
         <div class="ctx-sep" />
+        <div class="ctx-item" @click="duplicateNode(contextMenu.target)">📋 复制节点</div>
         <div class="ctx-item" @click="toggleNodeDisabled(contextMenu.target)">⏸ 禁用/启用</div>
+        <div class="ctx-sep" />
+        <div class="ctx-item danger" @click="deleteNode(contextMenu.target)">🗑 删除节点</div>
       </template>
       <template v-if="contextMenu.type === 'edge'">
         <div class="ctx-item" @click="setEdgeType(contextMenu.target, 'normal')">→ 普通边</div>
@@ -191,6 +233,79 @@
         <div class="ctx-item danger" @click="clearCanvas">🗑 清空画布</div>
       </template>
     </div>
+
+    <!-- 保存流程弹窗 -->
+    <a-modal
+      v-model:open="saveModalShow"
+      :closable="false"
+      :mask-closable="false"
+      width="420px"
+      :footer="null"
+      wrap-class-name="save-flow-modal"
+    >
+      <div class="save-modal-content">
+        <div class="save-modal-icon">💾</div>
+        <div class="save-modal-title">保存流程</div>
+        <div class="save-modal-sub">输入流程名称和描述</div>
+        <a-input v-model:value="saveModalName" placeholder="流程名称..." size="large" class="save-modal-input" @press-enter="confirmSaveAs" />
+        <a-textarea v-model:value="saveModalDesc" placeholder="流程描述（可选）..." :rows="2" size="large" class="save-modal-textarea" style="margin-bottom:20px" />
+        <div class="save-modal-actions">
+          <a-button size="large" @click="saveModalShow = false" class="cancel-btn">取消</a-button>
+          <a-button size="large" type="primary" @click="confirmSaveAs" :disabled="!saveModalName.trim()">确认保存</a-button>
+        </div>
+      </div>
+    </a-modal>
+
+    <!-- 删除确认弹窗 -->
+    <a-modal
+      v-model:open="deleteModalShow"
+      :closable="false"
+      :mask-closable="false"
+      width="380px"
+      :footer="null"
+      wrap-class-name="save-flow-modal"
+    >
+      <div class="save-modal-content">
+        <div class="save-modal-icon" style="color:#ff7875">🗑</div>
+        <div class="save-modal-title">删除流程</div>
+        <div class="save-modal-sub">确定要删除 "<strong style="color:#ff7875">{{ flowName }}</strong>" 吗？此操作不可恢复。</div>
+        <div class="save-modal-actions">
+          <a-button size="large" @click="deleteModalShow = false" class="cancel-btn">取消</a-button>
+          <a-button size="large" danger @click="confirmDeleteFlow">确认删除</a-button>
+        </div>
+      </div>
+    </a-modal>
+
+    <!-- 执行配置弹窗 -->
+    <a-modal
+      v-model:open="execModalShow"
+      :closable="false"
+      :mask-closable="false"
+      width="460px"
+      :footer="null"
+      wrap-class-name="save-flow-modal"
+    >
+      <div class="save-modal-content" style="text-align:left">
+        <div class="save-modal-icon">🚀</div>
+        <div class="save-modal-title">配置并执行</div>
+        <div class="save-modal-sub">填写论文信息后开始执行流程</div>
+        <a-form layout="vertical" size="middle">
+          <a-form-item label="论文主题" required style="margin-bottom:12px">
+            <a-input v-model:value="execForm.topic" placeholder="如：深度学习在医疗影像分割中的应用" />
+          </a-form-item>
+          <a-form-item label="详细描述" style="margin-bottom:12px">
+            <a-textarea v-model:value="execForm.description" placeholder="研究方向、背景、预期目标..." :rows="2" />
+          </a-form-item>
+          <a-form-item label="关键词" style="margin-bottom:12px">
+            <a-input v-model:value="execForm.keywords" placeholder="用逗号分隔，如：深度学习,医疗影像" />
+          </a-form-item>
+        </a-form>
+        <div class="save-modal-actions">
+          <a-button size="large" @click="execModalShow = false" class="cancel-btn">取消</a-button>
+          <a-button size="large" type="primary" @click="confirmExecution" :disabled="!execForm.topic.trim()">🚀 开始执行</a-button>
+        </div>
+      </div>
+    </a-modal>
   </div>
 </template>
 
@@ -204,11 +319,12 @@ import '@vue-flow/core/dist/theme-default.css'
 import AgentNode from '@/components/flow/AgentNode.vue'
 import ConditionNode from '@/components/flow/ConditionNode.vue'
 import LoopNode from '@/components/flow/LoopNode.vue'
+import PaperNode from '@/components/flow/PaperNode.vue'
 import ParticleBackground from '@/components/flow/ParticleBackground.vue'
-import { getFlowList } from '@/api'
+import { listFlows, getFlow, createFlow, updateFlow, deleteFlow, createPaper, startWriting, getPaperList, getPaperDetail } from '@/api'
 import { message } from 'ant-design-vue'
 
-const nodeTypes = { agent: AgentNode, condition: ConditionNode, loop: LoopNode }
+const nodeTypes = { agent: AgentNode, condition: ConditionNode, loop: LoopNode, paper: PaperNode }
 const { zoomIn, zoomOut, fitView, screenToFlowCoordinate, addNodes, addEdges, removeNodes, removeEdges } = useVueFlow()
 
 // ===== 编辑模式 =====
@@ -218,6 +334,7 @@ let execTimer = null
 
 // ===== 节点面板 =====
 const paletteItems = [
+  { type: 'PAPER', icon: '📄', label: '论文任务', color: '#9254de' },
   { type: 'SUPERVISOR', icon: '🧭', label: '导师 Agent', color: '#9254de' },
   { type: 'RESEARCHER', icon: '🔬', label: '研究员 Agent', color: '#1890ff' },
   { type: 'WRITER', icon: '✍️', label: '写作者 Agent', color: '#52c41a' },
@@ -233,8 +350,34 @@ const ROLE_NAMES = { SUPERVISOR: '导师', RESEARCHER: '研究员', WRITER: '写
 const roleOptions = Object.entries(ROLE_NAMES).map(([k, v]) => ({ value: k, label: v }))
 const modelOptions = ['qwen-max', 'qwen-plus', 'qwen-turbo', 'deepseek-v3', 'deepseek-r1'].map(m => ({ value: m, label: m }))
 
-// ===== 流程数据 =====
+// ===== 流程管理 =====
 const availableFlows = ref([])
+const currentFlowId = ref('standard')
+const flowSource = ref('preset')    // 'preset' | 'custom' | 'new'
+const flowDbId = ref(null)          // DB 中的 id
+const flowName = ref('')
+const flowDirty = ref(false)
+const saveModalShow = ref(false)
+const saveModalName = ref('')
+const saveModalDesc = ref('')
+const deleteModalShow = ref(false)
+const execModalShow = ref(false)
+const execForm = reactive({ topic: '', description: '', keywords: '' })
+
+const flowSelectOptions = computed(() => {
+  const groups = []
+  const presets = availableFlows.value.filter(f => f.source === 'preset')
+  const customs = availableFlows.value.filter(f => f.source === 'custom')
+  if (presets.length) {
+    groups.push({ label: '预设流程', options: presets.map(f => ({ value: f.id, label: f.name, category: f.category, source: 'preset' })) })
+  }
+  if (customs.length) {
+    groups.push({ label: '我的流程', options: customs.map(f => ({ value: f.id, label: f.name, category: f.category, source: 'custom' })) })
+  }
+  return groups
+})
+
+// ===== 流程数据 =====
 const nodes = ref([])
 const edges = ref([])
 const selectedNode = ref(null)
@@ -248,7 +391,8 @@ const editingModel = ref('qwen-max')
 const editingTemperature = ref(0.7)
 const editingTimeout = ref(120)
 const editingRetry = ref(2)
-const editingNotes = ref('')
+const editingPaperId = ref(null)
+const canvasPaperTasks = ref([])
 
 watch(selectedNode, (n) => {
   if (!n) return
@@ -262,9 +406,32 @@ watch(selectedNode, (n) => {
   editingNotes.value = n.data?.config?.notes || ''
 })
 
+async function applyPaperSelect(paperId) {
+  if (!selectedNode.value || selectedNode.value.type !== 'paper' || !paperId) return
+  try {
+    const res = await getPaperDetail(paperId)
+    const paper = res?.data
+    if (paper) {
+      selectedNode.value.data = {
+        ...selectedNode.value.data,
+        label: '📄 ' + (paper.title || '论文任务'),
+        config: { ...selectedNode.value.data?.config, paperId, paperTitle: paper.title }
+      }
+      pushHistory()
+      message.success('已关联: ' + paper.title)
+    }
+  } catch (_) { message.error('获取论文信息失败') }
+}
+
 function applyEdit() {
   if (!selectedNode.value) return
   const n = selectedNode.value
+  // 论文节点单独处理
+  if (n.type === 'paper') {
+    n.data = { ...n.data, label: editingLabel.value || n.data?.label }
+    pushHistory()
+    return
+  }
   n.data = {
     ...n.data,
     agentRole: editingRole.value,
@@ -296,7 +463,10 @@ function onDrop(event) {
   const id = `node-${Date.now()}`
   const isControl = controlItems.includes(dragItem)
   let nodeType, nodeData
-  if (isControl) {
+  if (dragItem.type === 'PAPER') {
+    nodeType = 'paper'
+    nodeData = { label: '📄 论文任务', stepIndex: 0, config: { paperId: null, paperTitle: '点击选择任务' }, status: 'pending' }
+  } else if (isControl) {
     if (dragItem.type === 'CONDITION') {
       nodeType = 'condition'
       nodeData = { label: '条件分支', stepIndex: nodes.value.length + 1, config: { condition: 'output.contains(\'严重问题\')', notes: '' }, status: 'pending' }
@@ -381,6 +551,8 @@ function onCanvasContextMenu(event) {
     const node = nodes.value.find(n => n.id === nodeId)
     contextMenu.type = 'node'
     contextMenu.target = node
+    selectedNode.value = node  // 右击直接选中，右侧面板同步显示
+    selectedEdge.value = null
   } else if (edgeEl) {
     const edgeId = edgeEl.getAttribute('data-id')
     const edge = edges.value.find(e => e.id === edgeId)
@@ -429,6 +601,15 @@ function duplicateNode(node) {
 }
 
 function deleteSelectedNode() { deleteNode(selectedNode.value) }
+function configureNode(node) {
+  const target = node || selectedNode.value
+  closeContextMenu()
+  if (target) {
+    selectedNode.value = null
+    nextTick(() => { selectedNode.value = target })
+  }
+}
+
 function toggleNodeDisabled(node) {
   closeContextMenu()
   pushHistory()
@@ -543,6 +724,7 @@ function pushHistory() {
   }
   history.value.push(snapshot)
   historyIndex.value = history.value.length - 1
+  markDirty()
 }
 
 function undo() {
@@ -569,135 +751,495 @@ const validationResult = ref(null)
 
 function validateFlow() {
   const errors = []
-  // 孤立节点检测
+  // 孤立节点
   const connectedIds = new Set()
   edges.value.forEach(e => { connectedIds.add(e.source); connectedIds.add(e.target) })
-  const orphans = nodes.value.filter(n => !connectedIds.has(n.id))
-  if (orphans.length) {
-    errors.push(`${orphans.length} 个孤立节点未连线`)
-  }
-  // 环检测：跳过回退边
-  const loopEdges = edges.value.filter(e => e.data?.conditionType === 'loop')
+  nodes.value.filter(n => !connectedIds.has(n.id)).forEach(n => {
+    errors.push(`节点 "${n.data?.label || n.id}" 未连接到任何边`)
+  })
+  // 环检测 — 跳过 loop 边
   const normalEdges = edges.value.filter(e => e.data?.conditionType !== 'loop')
-  const adj = {}
-  nodes.value.forEach(n => { adj[n.id] = [] })
+  const adj = {}; nodes.value.forEach(n => { adj[n.id] = [] })
   normalEdges.forEach(e => { if (adj[e.source]) adj[e.source].push(e.target) })
-  const visiting = new Set()
-  const visited = new Set()
-  let hasCycle = false
+  const state = {}; nodes.value.forEach(n => { state[n.id] = 0 }) // 0=unvisited, 1=visiting, 2=visited
+  let cycleNodeId = null
   function dfs(id) {
-    if (visiting.has(id)) { hasCycle = true; return }
-    if (visited.has(id)) return
-    visiting.add(id)
+    if (state[id] === 1) { cycleNodeId = id; return }
+    if (state[id] === 2) return
+    state[id] = 1
     ;(adj[id] || []).forEach(dfs)
-    visiting.delete(id)
-    visited.add(id)
+    state[id] = 2
   }
-  nodes.value.forEach(n => { if (!visited.has(n.id)) dfs(n.id) })
-  if (hasCycle) {
-    errors.push('存在意外的循环依赖 — 如需设计循环请将回退边标记为"回退边"')
+  nodes.value.forEach(n => { if (state[n.id] === 0) dfs(n.id) })
+  if (cycleNodeId) {
+    const n = nodes.value.find(nn => nn.id === cycleNodeId)
+    errors.push(`存在意外的循环依赖: "${n?.data?.label || cycleNodeId}" — 请将回退边标记为"回退边"`)
   }
-  // 起始节点检测
-  const hasStart = nodes.value.some(n => !edges.value.some(e => e.target === n.id && e.data?.conditionType !== 'loop'))
-  if (!hasStart && nodes.value.length > 0) {
-    errors.push('未找到起始节点')
+  // 起始节点 — 所有边（含 loop）都算"有入边"
+  const hasInEdge = new Set()
+  edges.value.forEach(e => hasInEdge.add(e.target))
+  const starts = nodes.value.filter(n => !hasInEdge.has(n.id))
+  if (starts.length === 0 && nodes.value.length > 0) errors.push('未找到起始节点')
+  if (starts.length > 1) {
+    const names = starts.map(n => n.data?.label || n.id).join(', ')
+    errors.push(`${starts.length} 个入口: ${names} — 建议只保留一个`)
   }
-  // 回退边统计
-  if (loopEdges.length > 0) {
-    validationResult.value = { valid: errors.length === 0, errors, loopCount: loopEdges.length }
-  } else {
-    validationResult.value = { valid: errors.length === 0, errors, loopCount: 0 }
-  }
-  if (errors.length === 0) {
-    const msg = loopEdges.length ? `校验通过 (含 ${loopEdges.length} 条回退边)` : '流程校验通过'
-    message.success(msg)
-  } else {
-    message.warning(`发现 ${errors.length} 个问题`)
-  }
+
+  const loopEdges = edges.value.filter(e => e.data?.conditionType === 'loop')
+  validationResult.value = { valid: errors.length === 0, errors, loopCount: loopEdges.length }
+  if (errors.length === 0) message.success(loopEdges.length ? `校验通过 (含 ${loopEdges.length} 条回退边)` : '流程校验通过')
+  else message.warning(`发现 ${errors.length} 个问题`)
 }
 
-// ===== 执行模拟 =====
+// ===== 执行引擎 =====
+let sseSource = null
+
+const execStatusText = computed(() => {
+  const total = nodes.value.length
+  const done = nodes.value.filter(n => n.data?.status === 'completed').length
+  const active = nodes.value.find(n => n.data?.status === 'in_progress')
+  if (active) return `${done}/${total} · ${active.data?.label || '执行中'}`
+  return `${done}/${total}`
+})
+
 function resetAllStatus() {
   nodes.value.forEach(n => { n.data = { ...n.data, status: 'pending' } })
 }
 
-function startExecution() {
+async function startExecution() {
   if (isExecuting.value) return
+  if (nodes.value.length === 0) { message.warning('画布为空'); return }
   validationResult.value = null
+
+  // 画布上有论文节点且已关联论文 → 直接用，不弹窗
+  const paperNode = nodes.value.find(n => n.type === 'paper' && n.data?.config?.paperId)
+  if (paperNode && flowSource.value === 'custom' && flowDbId.value) {
+    execForm.topic = paperNode.data.config.paperTitle || ''
+    execForm.description = ''
+    execForm.keywords = ''
+    confirmExecution(paperNode.data.config.paperId)
+    return
+  }
+
+  // 自定义流程 → 弹出配置弹窗（没有论文节点时需要用户填写）
+  if (flowSource.value === 'custom' && flowDbId.value) {
+    execForm.topic = ''
+    execForm.description = ''
+    execForm.keywords = ''
+    execModalShow.value = true
+    return
+  }
+
+  // 预设流程 → 直接模拟执行
+  resetAllStatus()
+  isExecuting.value = true
+  runSimulation()
+}
+
+async function confirmExecution(existingPaperId) {
+  // 传入了已有论文 ID → 直接执行，不创建新论文
+  if (existingPaperId) {
+    execModalShow.value = false
+    resetAllStatus()
+    isExecuting.value = true
+    try {
+      const data = { topic: execForm.topic || '执行论文', flowId: 'custom-' + flowDbId.value }
+      await startWriting(existingPaperId, data)
+      message.info('已提交 FlowEngine 执行')
+      connectSSE(existingPaperId)
+      return
+    } catch (e) {
+      message.error('启动失败: ' + (e.message || ''))
+      isExecuting.value = false
+    }
+    return
+  }
+
+  // 没有已有论文 → 弹窗填写并创建
+  const topic = execForm.topic.trim()
+  if (!topic) return
+  execModalShow.value = false
   resetAllStatus()
   isExecuting.value = true
 
-  // 拓扑排序 — 跳过回退边
-  const loopEdges = edges.value.filter(e => e.data?.conditionType === 'loop')
-  const forwardEdges = edges.value.filter(e => e.data?.conditionType !== 'loop')
-  const inDegree = {}
-  const adj = {}
-  const loopBacks = {} // 记录回退边: target -> [source]
-  nodes.value.forEach(n => { inDegree[n.id] = 0; adj[n.id] = []; loopBacks[n.id] = [] })
-  forwardEdges.forEach(e => {
-    if (adj[e.source]) { adj[e.source].push(e.target); inDegree[e.target] = (inDegree[e.target] || 0) + 1 }
-  })
-  loopEdges.forEach(e => {
-    if (loopBacks[e.target]) loopBacks[e.target].push(e.source)
-  })
-  const queue = nodes.value.filter(n => inDegree[n.id] === 0).map(n => n.id)
-  const order = []
-  while (queue.length) {
-    const id = queue.shift()
-    order.push(id)
-    ;(adj[id] || []).forEach(t => { inDegree[t]--; if (inDegree[t] === 0) queue.push(t) })
+  try {
+    const data = {
+      topic,
+      description: execForm.description.trim(),
+      keywords: execForm.keywords.trim(),
+      flowId: 'custom-' + flowDbId.value
+    }
+    const createRes = await createPaper(data)
+    const paperId = createRes?.data?.paperId
+    if (!paperId) throw new Error('创建论文失败')
+    await startWriting(paperId, data)
+    message.info('已提交 FlowEngine 执行')
+    connectSSE(paperId)
+    return
+  } catch (e) {
+    message.error('启动失败: ' + (e.message || ''))
+    isExecuting.value = false
   }
+}
 
-  // 按拓扑序模拟执行，回退边触发循环动画
-  let idx = 0
-  let iterationCount = 0
-  const maxIterations = 10 // 安全上限
+function connectSSE(paperId) {
+  const token = localStorage.getItem('paperai_token') || ''
+  sseSource = new EventSource(`/api/paper/write/${paperId}/stream?token=${encodeURIComponent(token)}`)
+  sseSource.addEventListener('node', (e) => {
+    try {
+      const d = JSON.parse(e.data)
+      const n = nodes.value.find(nn => nn.id === d.nodeId)
+      if (n) n.data = { ...n.data, status: d.status === 'in_progress' ? 'in_progress' : d.status === 'completed' ? 'completed' : d.status === 'failed' ? 'failed' : 'pending' }
+    } catch (_) {}
+  })
+  sseSource.addEventListener('complete', () => {
+    nodes.value.forEach(n => { n.data = { ...n.data, status: 'completed' } })
+    isExecuting.value = false; sseSource.close(); sseSource = null
+    message.success('FlowEngine 执行完成')
+  })
+  sseSource.addEventListener('error', () => {
+    isExecuting.value = false; sseSource.close(); sseSource = null
+    message.error('执行出错')
+  })
+}
 
-  function step() {
+function runSimulation() {
+  // 将边按类型分类
+  const forwardOut = {}  // nodeId -> [targetId]  正向边（normal + success + failure）
+  const loopBack = {}    // nodeId -> [targetId]  回退边（loop）
+  const edgeMap = {}     // (source,target) -> edge
+  nodes.value.forEach(n => { forwardOut[n.id] = []; loopBack[n.id] = [] })
+  edges.value.forEach(e => {
+    edgeMap[e.source + '->' + e.target] = e
+    if (e.data?.conditionType === 'loop') {
+      if (loopBack[e.source]) loopBack[e.source].push(e.target)
+    } else {
+      if (forwardOut[e.source]) forwardOut[e.source].push(e.target)
+    }
+  })
+
+  // 入口节点：没有任何入边的节点（含 loop 边）
+  const allInEdges = new Set()
+  edges.value.forEach(e => allInEdges.add(e.target))
+  const entries = nodes.value.filter(n => !allInEdges.has(n.id))
+  if (entries.length === 0) { message.warning('找不到起始节点'); isExecuting.value = false; return }
+
+  // ── 执行状态 ──
+  const loopCounter = {}     // nodeId -> 已循环次数
+  const completed = new Set()
+  let currentNodeId = entries[0].id
+  let stepCount = 0
+  const MAX_STEPS = 40
+
+  function findNode(id) { return nodes.value.find(n => n.id === id) }
+
+  function executeStep() {
     if (!isExecuting.value) return
-    if (idx >= order.length || iterationCount >= maxIterations) {
-      // 所有节点设为完成
-      nodes.value.forEach(n => { n.data = { ...n.data, status: 'completed' } })
-      isExecuting.value = false
-      message.success('执行完成')
-      return
-    }
-    const nodeId = order[idx]
-    if (idx > 0) {
-      const prev = nodes.value.find(n => n.id === order[idx - 1])
-      if (prev) prev.data = { ...prev.data, status: 'completed' }
-    }
-    const cur = nodes.value.find(n => n.id === nodeId)
-    if (cur) cur.data = { ...cur.data, status: 'in_progress' }
+    if (stepCount >= MAX_STEPS) { finishExecution('达最大步数限制'); return }
 
-    // 检查当前节点是否有回退边
-    const backs = loopBacks[nodeId] || []
-    if (backs.length > 0 && iterationCount < maxIterations - 1) {
-      // 模拟一次回退：把回退边的 source 节点排到前面重来
-      const backIdx = order.indexOf(backs[0])
-      if (backIdx >= 0 && backIdx < idx) {
-        // 回退：将后续节点重置，从回退目标重新开始
-        for (let i = backIdx; i < order.length; i++) {
-          const n = nodes.value.find(nn => nn.id === order[i])
-          if (n) n.data = { ...n.data, status: 'pending' }
+    const node = findNode(currentNodeId)
+    if (!node) { finishExecution('节点丢失'); return }
+
+    // 判断当前节点是否所有前置都已满足
+    const predecessors = [] // 正常流程不需要检查 — 我们从拓扑入口顺序走
+
+    // 标记执行中
+    node.data = { ...node.data, status: 'in_progress' }
+    stepCount++
+
+    execTimer = setTimeout(() => {
+      if (!isExecuting.value) return
+
+      // 标记完成
+      node.data = { ...node.data, status: 'completed' }
+      completed.add(currentNodeId)
+
+      // ── 决定下一个节点 ──
+      let nextId = null
+
+      if (node.type === 'condition') {
+        // 条件节点：根据 conditionType 边的标签选择
+        const passEdge = edges.value.find(e => e.source === node.id && e.data?.conditionType === 'success')
+        const failEdge = edges.value.find(e => e.source === node.id && e.data?.conditionType === 'failure')
+        // 模拟条件评估: 交替走 pass/fail 以演示两支
+        const goPass = Math.random() > 0.4
+        if (goPass && passEdge) {
+          nextId = passEdge.target
+          message.info('条件判断: ✓ 通过 → ' + (findNode(nextId)?.data?.label || nextId))
+        } else if (failEdge) {
+          nextId = failEdge.target
+          message.info('条件判断: ✗ 不通过 → ' + (findNode(nextId)?.data?.label || nextId))
+        } else if (passEdge) {
+          nextId = passEdge.target
         }
-        idx = backIdx
-        iterationCount++
-        execTimer = setTimeout(step, 1200)
-        return
-      }
-    }
+      } else if (node.type === 'loop') {
+        // 循环节点: track iterations
+        const maxIter = node.data?.config?.maxIterations || 3
+        const curIter = loopCounter[node.id] || 0
+        const backTargets = loopBack[node.id] || []
+        const forwardTargets = forwardOut[node.id] || []
 
-    idx++
-    execTimer = setTimeout(step, 800)
+        if (curIter < maxIter && backTargets.length > 0) {
+          loopCounter[node.id] = curIter + 1
+          nextId = backTargets[0]
+          message.info(`循环: 第 ${curIter + 1}/${maxIter} 轮 → 回退到 "${findNode(nextId)?.data?.label || nextId}"`)
+          // 重置回退路径上节点的状态
+          resetPath(nextId, node.id)
+        } else if (forwardTargets.length > 0) {
+          nextId = forwardTargets[0]
+          message.info(`循环结束: 已完成 ${curIter} 轮 → 继续前进`)
+        }
+      } else {
+        // 普通 Agent 节点: 优先走正向边，其次走回退边
+        const forwardTargets = forwardOut[node.id] || []
+        const loopTargets = loopBack[node.id] || []
+        if (forwardTargets.length > 0) {
+          nextId = forwardTargets[0]
+        } else if (loopTargets.length > 0) {
+          nextId = loopTargets[0]
+        }
+      }
+
+      if (!nextId) { finishExecution('流程到达终点'); return }
+      currentNodeId = nextId
+      executeStep()
+    }, 800)
   }
-  step()
+
+  function resetPath(fromId, toId) {
+    // 将 fromId 到 toId 之间所有节点的状态重置为 pending
+    // 简化：找到 fromId 及其正向可达节点（在 toId 之前）
+    const toReset = new Set()
+    const queue = [fromId]
+    while (queue.length) {
+      const id = queue.shift()
+      if (toReset.has(id) || completed.has(id) === false) continue
+      if (id === toId) continue
+      toReset.add(id)
+      ;(forwardOut[id] || []).forEach(t => { if (t !== toId) queue.push(t) })
+    }
+    toReset.forEach(id => {
+      const n = findNode(id)
+      if (n && completed.has(id)) {
+        n.data = { ...n.data, status: 'pending' }
+        completed.delete(id)
+      }
+    })
+  }
+
+  function finishExecution(reason) {
+    // 已完成节点保持 completed，其他保持 pending
+    nodes.value.forEach(n => {
+      if (!completed.has(n.id)) {
+        // 那些从入口可达但未完成的，标记为 pending（已经是 default）
+      }
+    })
+    isExecuting.value = false
+    message.success(reason || '执行完成')
+  }
+
+  executeStep()
 }
 
 function stopExecution() {
   isExecuting.value = false
   clearTimeout(execTimer)
+  if (sseSource) { sseSource.close(); sseSource = null }
   resetAllStatus()
+}
+
+// ===== 流程管理操作 =====
+async function onFlowSelect(flowId) {
+  if (!flowId) return
+  currentFlowId.value = flowId
+  flowDirty.value = false
+
+  // 预设流程
+  const presetFlow = availableFlows.value.find(f => f.id === flowId && f.source === 'preset')
+  if (presetFlow) {
+    flowSource.value = 'preset'
+    flowDbId.value = null
+    flowName.value = presetFlow.name
+    loadPresetGraph(flowId)
+    return
+  }
+
+  // 自定义流程 — 从 API 加载
+  const customFlow = availableFlows.value.find(f => f.id === flowId && f.source === 'custom')
+  if (customFlow && customFlow.dbId) {
+    flowSource.value = 'custom'
+    flowDbId.value = customFlow.dbId
+    flowName.value = customFlow.name
+    try {
+      const res = await getFlow(customFlow.dbId)
+      if (res.data?.graphData) {
+        const data = JSON.parse(res.data.graphData)
+        nodes.value = data.nodes || []
+        edges.value = data.edges || []
+        selectedNode.value = null
+        history.value = []
+        historyIndex.value = -1
+        pushHistory()
+        nextTick(() => fitView())
+      }
+    } catch (e) {
+      message.error('加载流程失败')
+    }
+    return
+  }
+}
+
+function loadPresetGraph(flowId) {
+  const steps = DEFAULT_STEPS_MAP[flowId] || DEFAULT_STEPS_MAP.standard
+  const ns = steps.map((s, i) => ({
+    id: `node-${i}`,
+    type: 'agent',
+    position: { x: 280, y: i * 110 + 40 },
+    data: { agentRole: s.role, label: s.label, roleName: ROLE_NAMES[s.role], stepIndex: i + 1, config: { systemPrompt: '', model: 'qwen-max', temperature: 0.7, timeout: 120, retryCount: 2, notes: '' }, status: 'pending' }
+  }))
+  const es = []
+  for (let i = 0; i < ns.length - 1; i++) {
+    es.push({
+      id: `edge-${i}-${i + 1}`, source: ns[i].id, target: ns[i + 1].id,
+      type: 'smoothstep', animated: true,
+      style: { stroke: 'rgba(255,255,255,0.18)', strokeWidth: 1.5 },
+      markerEnd: { type: MarkerType.ArrowClosed, color: 'rgba(255,255,255,0.3)', width: 16, height: 16 },
+      data: { label: '', conditionType: 'normal' }
+    })
+  }
+  nodes.value = ns
+  edges.value = es
+  selectedNode.value = null
+  history.value = []
+  historyIndex.value = -1
+  pushHistory()
+  nextTick(() => fitView())
+}
+
+const DEFAULT_STEPS_MAP = {
+  standard: [
+    { role: 'SUPERVISOR', label: '🧭 选题评估' }, { role: 'RESEARCHER', label: '🔬 文献调研' },
+    { role: 'SUPERVISOR', label: '📋 大纲审阅' }, { role: 'WRITER', label: '✍️ 引言' },
+    { role: 'WRITER', label: '✍️ 方法' }, { role: 'WRITER', label: '✍️ 实验' }, { role: 'WRITER', label: '✍️ 结论' },
+    { role: 'REVIEWER', label: '📝 审稿迭代' }, { role: 'POLISHER', label: '✨ 润色定稿' }, { role: 'SUPERVISOR', label: '✅ 最终审核' }
+  ],
+  quick_draft: [
+    { role: 'RESEARCHER', label: '🔬 文献调研' }, { role: 'SUPERVISOR', label: '📋 大纲审阅' },
+    { role: 'WRITER', label: '✍️ 引言' }, { role: 'WRITER', label: '✍️ 方法' }, { role: 'WRITER', label: '✍️ 实验' }, { role: 'WRITER', label: '✍️ 结论' },
+    { role: 'POLISHER', label: '✨ 润色定稿' }, { role: 'SUPERVISOR', label: '✅ 最终审核' }
+  ],
+  deep_research: [
+    { role: 'SUPERVISOR', label: '🧭 选题评估' }, { role: 'RESEARCHER', label: '🔬 深度文献调研' },
+    { role: 'SUPERVISOR', label: '📋 大纲审阅' }, { role: 'WRITER', label: '✍️ 引言' },
+    { role: 'WRITER', label: '✍️ 方法' }, { role: 'WRITER', label: '✍️ 实验' }, { role: 'WRITER', label: '✍️ 结论' },
+    { role: 'REVIEWER', label: '📝 审稿迭代 ×5' }, { role: 'POLISHER', label: '✨ 润色定稿' }, { role: 'SUPERVISOR', label: '✅ 最终审核' }
+  ],
+  write_only: [
+    { role: 'WRITER', label: '✍️ 引言' }, { role: 'WRITER', label: '✍️ 方法' }, { role: 'WRITER', label: '✍️ 实验' }, { role: 'WRITER', label: '✍️ 结论' },
+    { role: 'POLISHER', label: '✨ 润色定稿' }, { role: 'SUPERVISOR', label: '✅ 最终审核' }
+  ],
+  review_paper: [
+    { role: 'RESEARCHER', label: '🔬 深度文献调研' }, { role: 'SUPERVISOR', label: '📋 大纲审阅' },
+    { role: 'WRITER', label: '✍️ 引言' }, { role: 'WRITER', label: '✍️ 方法' }, { role: 'WRITER', label: '✍️ 实验' }, { role: 'WRITER', label: '✍️ 结论' },
+    { role: 'POLISHER', label: '✨ 润色定稿' }, { role: 'SUPERVISOR', label: '✅ 最终审核' }
+  ]
+}
+
+function handleNewFlow() {
+  flowSource.value = 'new'
+  flowDbId.value = null
+  flowName.value = ''
+  currentFlowId.value = null
+  flowDirty.value = false
+  nodes.value = []
+  edges.value = []
+  selectedNode.value = null
+  history.value = []
+  historyIndex.value = -1
+}
+
+async function handleSaveFlow() {
+  if (nodes.value.length === 0) { message.warning('画布为空，请先添加节点'); return }
+  // 已有 DB 记录 → 直接更新
+  if (flowDbId.value) {
+    try {
+      const data = { name: flowName.value, graphData: JSON.stringify({ nodes: nodes.value, edges: edges.value }) }
+      await updateFlow(flowDbId.value, data)
+      flowDirty.value = false
+      message.success('流程已保存')
+      return
+    } catch (e) {
+      message.error('保存失败: ' + (e.message || ''))
+      return
+    }
+  }
+  // 没有 DB 记录 → 走另存为
+  handleSaveAsFlow()
+}
+
+function handleSaveAsFlow() {
+  if (nodes.value.length === 0) { message.warning('画布为空，请先添加节点'); return }
+  saveModalName.value = flowDbId.value ? flowName.value + ' (副本)' : (flowName.value || '')
+  saveModalDesc.value = ''
+  saveModalShow.value = true
+}
+
+async function confirmSaveAs() {
+  const name = saveModalName.value.trim()
+  if (!name) return
+  saveModalShow.value = false
+  try {
+    const data = {
+      name, description: saveModalDesc.value.trim(),
+      graphData: JSON.stringify({ nodes: nodes.value, edges: edges.value }),
+      category: 'custom'
+    }
+    const res = await createFlow(data)
+    const dbId = res.data?.id
+    flowSource.value = 'custom'
+    flowDbId.value = dbId
+    flowName.value = name
+    flowDirty.value = false
+    currentFlowId.value = 'custom-' + dbId
+    const flowRes = await listFlows()
+    availableFlows.value = flowRes.data || []
+    saveModalName.value = ''
+    saveModalDesc.value = ''
+    message.success('流程已保存: ' + name)
+  } catch (e) {
+    message.error('保存失败: ' + (e.message || ''))
+  }
+}
+
+function handleDeleteFlow() {
+  if (!flowDbId.value) return
+  deleteModalShow.value = true
+}
+
+async function confirmDeleteFlow() {
+  deleteModalShow.value = false
+  try {
+    await deleteFlow(flowDbId.value)
+    message.success('流程已删除')
+    flowSource.value = 'preset'
+    flowDbId.value = null
+    currentFlowId.value = 'standard'
+    loadPresetGraph('standard')
+    const flowRes = await listFlows()
+    availableFlows.value = flowRes.data || []
+  } catch (e) {
+    message.error('删除失败: ' + (e.message || ''))
+  }
+}
+
+// 标记脏数据
+function markDirty() {
+  if (flowSource.value === 'preset' && nodes.value.length > 0) {
+    flowSource.value = 'new'
+    flowDbId.value = null
+    currentFlowId.value = null
+  }
+  flowDirty.value = true
 }
 
 // ===== 工具 =====
@@ -708,40 +1250,56 @@ function roleColor(role) {
 
 // ===== 初始化 =====
 onMounted(async () => {
-  try { const res = await getFlowList(); availableFlows.value = res.data || [] } catch (_) {}
-  // 加载默认流程作为起点
-  const DEFAULT_STEPS = [
-    { role: 'SUPERVISOR', label: '🧭 选题评估' },
-    { role: 'RESEARCHER', label: '🔬 文献调研' },
-    { role: 'SUPERVISOR', label: '📋 大纲审阅' },
-    { role: 'WRITER', label: '✍️ 引言' },
-    { role: 'WRITER', label: '✍️ 方法' },
-    { role: 'WRITER', label: '✍️ 实验' },
-    { role: 'WRITER', label: '✍️ 结论' },
-    { role: 'REVIEWER', label: '📝 审稿迭代' },
-    { role: 'POLISHER', label: '✨ 润色定稿' },
-    { role: 'SUPERVISOR', label: '✅ 最终审核' }
-  ]
-  const ns = DEFAULT_STEPS.map((s, i) => ({
-    id: `node-${i}`,
-    type: 'agent',
-    position: { x: 280, y: i * 110 + 40 },
-    data: { agentRole: s.role, label: s.label, roleName: ROLE_NAMES[s.role], stepIndex: i + 1, config: { systemPrompt: '', model: 'qwen-max', temperature: 0.7, timeout: 120, retryCount: 2, notes: '' }, status: 'pending' }
-  }))
-  const es = []
-  for (let i = 0; i < ns.length - 1; i++) {
-    es.push({
-      id: `edge-${i}-${i + 1}`,
-      source: ns[i].id, target: ns[i + 1].id,
-      type: 'smoothstep', animated: true,
-      style: { stroke: 'rgba(255,255,255,0.18)', strokeWidth: 1.5 },
-      markerEnd: { type: MarkerType.ArrowClosed, color: 'rgba(255,255,255,0.3)', width: 16, height: 16 },
-      data: { label: '', conditionType: 'normal' }
-    })
+  try {
+    const res = await listFlows()
+    availableFlows.value = res.data || []
+  } catch (_) {}
+  // 加载论文任务（供论文节点选择）
+  try {
+    const paperRes = await getPaperList()
+    canvasPaperTasks.value = (paperRes.data || []).filter(p => p.status === 'DRAFT' || p.status === 'FAILED')
+  } catch (_) {}
+
+  // 恢复上次编辑的流程，否则加载默认标准流程
+  const savedFlowId = localStorage.getItem('paperai_flow_id')
+  const savedFlowSource = localStorage.getItem('paperai_flow_source')
+  const savedGraphData = localStorage.getItem('paperai_flow_graph')
+
+  if (savedFlowId && savedFlowSource) {
+    currentFlowId.value = savedFlowId
+    flowSource.value = savedFlowSource
+
+    if (savedFlowSource === 'preset') {
+      loadPresetGraph(savedFlowId)
+    } else if (savedFlowSource === 'custom' && savedGraphData) {
+      try {
+        const data = JSON.parse(savedGraphData)
+        nodes.value = data.nodes || []
+        edges.value = data.edges || []
+        pushHistory()
+      } catch (_) {
+        loadPresetGraph('standard')
+      }
+    }
+    // 尝试从 API 刷新自定义流程
+    if (savedFlowSource === 'custom') {
+      const match = savedFlowId.match(/^custom-(\d+)$/)
+      if (match) {
+        try {
+          const res = await getFlow(Number(match[1]))
+          if (res.data?.graphData) {
+            const data = JSON.parse(res.data.graphData)
+            nodes.value = data.nodes || []
+            edges.value = data.edges || []
+            flowDbId.value = Number(match[1])
+            pushHistory()
+          }
+        } catch (_) {}
+      }
+    }
+  } else {
+    loadPresetGraph('standard')
   }
-  nodes.value = ns
-  edges.value = es
-  pushHistory()
 })
 </script>
 
@@ -762,6 +1320,27 @@ onMounted(async () => {
   border-bottom: 1px solid rgba(255,255,255,0.06);
   flex-shrink: 0; gap: 12px;
 }
+
+/* 执行状态栏 */
+.exec-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 20px;
+  background: rgba(89,126,247,0.1);
+  border-bottom: 1px solid rgba(89,126,247,0.2);
+  flex-shrink: 0; z-index: 9;
+  font-size: 12px; color: #85a5ff; font-weight: 500;
+}
+.exec-bar-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #597ef7;
+  animation: execDotPulse 0.8s ease-in-out infinite;
+}
+@keyframes execDotPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(1.5); }
+}
+.exec-bar-hint { margin-left: auto; font-size: 10px; color: rgba(89,126,247,0.4); }
+
 .toolbar-left { display: flex; align-items: center; gap: 12px; }
 .toolbar-center { display: flex; align-items: center; }
 .toolbar-right { display: flex; align-items: center; }
@@ -868,4 +1447,53 @@ onMounted(async () => {
 .ctx-item:hover { background: rgba(146,84,222,0.15); color: #fff; }
 .ctx-item.danger:hover { background: rgba(255,77,79,0.2); color: #ff7875; }
 .ctx-sep { height: 1px; background: rgba(255,255,255,0.06); margin: 4px 8px; }
+</style>
+
+<style>
+/* ===== 保存流程弹窗（全局样式） ===== */
+.save-flow-modal .ant-modal-content {
+  background: linear-gradient(145deg, rgba(18,24,42,0.98) 0%, rgba(15,20,38,0.96) 100%) !important;
+  backdrop-filter: blur(24px);
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  border-radius: 16px !important;
+  overflow: hidden;
+}
+.save-flow-modal .ant-modal-body {
+  padding: 0 !important;
+}
+.save-modal-content {
+  padding: 36px 32px 28px;
+  text-align: center;
+}
+.save-modal-icon { font-size: 40px; margin-bottom: 8px; }
+.save-modal-title { font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 4px; }
+.save-modal-sub { font-size: 12px; color: rgba(255,255,255,0.35); margin-bottom: 20px; }
+.save-modal-input, .save-modal-textarea {
+  background: rgba(255,255,255,0.04) !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  border-radius: 10px !important;
+  color: #fff !important;
+  font-size: 14px !important;
+  margin-bottom: 14px;
+}
+.save-modal-textarea textarea {
+  background: transparent !important;
+  color: #fff !important;
+}
+.save-modal-input:focus, .save-modal-textarea:focus,
+.save-modal-input:hover, .save-modal-textarea:hover {
+  border-color: rgba(146,84,222,0.4) !important;
+}
+.save-modal-actions {
+  display: flex; gap: 12px; justify-content: center;
+}
+.save-modal-actions .cancel-btn {
+  background: rgba(255,255,255,0.04) !important;
+  border-color: rgba(255,255,255,0.1) !important;
+  color: rgba(255,255,255,0.6) !important;
+}
+.save-modal-actions .cancel-btn:hover {
+  background: rgba(255,255,255,0.08) !important;
+  color: #fff !important;
+}
 </style>

@@ -5,6 +5,24 @@
       <a-col :span="9">
         <a-card :bordered="false">
           <a-form :model="form" layout="vertical">
+            <!-- 论文任务选择 -->
+            <a-form-item label="论文任务" v-if="!isCoreLocked">
+              <a-select
+                v-model:value="selectedPaperId"
+                placeholder="选择已有任务或手动填写"
+                allow-clear
+                :disabled="isCoreLocked"
+                @change="onPaperSelect"
+              >
+                <a-select-option v-for="p in pendingPapers" :key="p.id" :value="p.id">
+                  {{ p.title }}
+                </a-select-option>
+              </a-select>
+              <div style="font-size:10px;color:rgba(255,255,255,0.25);margin-top:2px">
+                选择一个待执行的论文任务，或留空手动填写
+              </div>
+            </a-form-item>
+
             <!-- 流程选择 -->
             <a-form-item label="写作流程">
               <a-select
@@ -23,14 +41,6 @@
                   </div>
                 </a-select-option>
               </a-select>
-              <div v-if="selectedFlowDef" class="flow-preview">
-                <div class="flow-preview-steps">
-                  <template v-for="(step, i) in selectedFlowDef.steps" :key="i">
-                    <span class="flow-step-tag">{{ step.icon }} {{ step.name }}</span>
-                    <span v-if="i < selectedFlowDef.steps.length - 1" class="flow-step-arrow">→</span>
-                  </template>
-                </div>
-              </div>
             </a-form-item>
 
             <a-form-item label="论文主题" required>
@@ -251,9 +261,6 @@
                   </div>
                   <div class="step-info">
                     <div class="step-label">{{ step.label }}</div>
-                    <div class="step-sub" v-if="step.status === 'active' && step.estimatedTime">
-                      {{ step.estimatedTime }}
-                    </div>
                   </div>
                 </div>
               </div>
@@ -331,8 +338,8 @@
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { createPaper, startWriting, stopWriting, getFlowList } from '@/api'
+import { useRouter, useRoute } from 'vue-router'
+import { createPaper, startWriting, stopWriting, getFlowList, getPaperList, getPaperDetail } from '@/api'
 import { usePaperStepSSE } from '@/composables/usePaperStepSSE'
 import { message } from 'ant-design-vue'
 import MarkdownRender from '@/components/MarkdownRender.vue'
@@ -355,21 +362,37 @@ const SECTION_TEMPLATES = {
   conference: ['摘要', '引言', '方法', '实验', '结论', '参考文献']
 }
 
-// ===== 分步进度定义 =====
-const PROGRESS_STEPS = [
-  { key: 'connect', label: '连接写作引擎', estimatedTime: '约 5s' },
-  { key: 'outline', label: '生成论文大纲', estimatedTime: '约 30s' },
-  { key: 'abstract', label: '生成摘要', estimatedTime: '约 20s' },
-  { key: 'intro', label: '生成引言', estimatedTime: '约 45s' },
-  { key: 'related', label: '生成相关工作', estimatedTime: '约 1min' },
-  { key: 'method', label: '生成方法章节', estimatedTime: '约 1min' },
-  { key: 'experiment', label: '生成实验章节', estimatedTime: '约 1min' },
-  { key: 'conclusion', label: '生成结论', estimatedTime: '约 30s' },
-  { key: 'review', label: '审稿与润色', estimatedTime: '约 2min' },
-  { key: 'done', label: '完成', estimatedTime: null }
-]
-
 const router = useRouter()
+const route = useRoute()
+
+// ===== 论文任务选择 =====
+const pendingPapers = ref([])
+const selectedPaperId = ref(null)
+
+async function loadPendingPapers() {
+  try {
+    const res = await getPaperList()
+    pendingPapers.value = (res.data || []).filter(p => p.status === 'DRAFT' || p.status === 'FAILED')
+  } catch (_) {}
+}
+
+async function onPaperSelect(paperId) {
+  if (!paperId) { resetTaskForm(); return }
+  try {
+    const res = await getPaperDetail(paperId)
+    const paper = res?.data
+    if (paper) {
+      form.topic = paper.title || ''
+      form.description = paper.description || ''
+      form.keywords = paper.keywords || ''
+      if (paper.flowId) selectedFlowId.value = paper.flowId
+    }
+  } catch (_) {}
+}
+
+function resetTaskForm() {
+  form.topic = ''; form.description = ''; form.keywords = ''; selectedFlowId.value = 'standard'
+}
 
 // =============================================
 // 单一状态机
@@ -450,54 +473,8 @@ const paramModified = ref(false)
 const availableFlows = ref([])
 const selectedFlowId = ref('standard')
 
-// 流程步骤预览（前端映射，与后端 FlowProfile 一致）
-const FLOW_STEP_MAP = {
-  standard: [
-    { icon: '🧭', name: '选题评估' },
-    { icon: '🔬', name: '文献调研' },
-    { icon: '📋', name: '大纲审阅' },
-    { icon: '✍️', name: '逐章写作' },
-    { icon: '📝', name: '审稿迭代' },
-    { icon: '✨', name: '润色定稿' },
-    { icon: '✅', name: '最终审核' }
-  ],
-  quick_draft: [
-    { icon: '🔬', name: '文献调研' },
-    { icon: '📋', name: '大纲审阅' },
-    { icon: '✍️', name: '逐章写作' },
-    { icon: '✨', name: '润色定稿' },
-    { icon: '✅', name: '最终审核' }
-  ],
-  deep_research: [
-    { icon: '🧭', name: '选题评估' },
-    { icon: '🔬', name: '深度文献调研' },
-    { icon: '📋', name: '大纲审阅' },
-    { icon: '✍️', name: '逐章写作' },
-    { icon: '📝', name: '审稿迭代 ×5' },
-    { icon: '✨', name: '润色定稿' },
-    { icon: '✅', name: '最终审核' }
-  ],
-  write_only: [
-    { icon: '✍️', name: '逐章写作' },
-    { icon: '✨', name: '润色定稿' },
-    { icon: '✅', name: '最终审核' }
-  ],
-  review_paper: [
-    { icon: '🔬', name: '深度文献调研' },
-    { icon: '📋', name: '大纲审阅' },
-    { icon: '✍️', name: '逐章写作' },
-    { icon: '✨', name: '润色定稿' },
-    { icon: '✅', name: '最终审核' }
-  ]
-}
-
-const selectedFlowDef = computed(() => FLOW_STEP_MAP[selectedFlowId.value] || FLOW_STEP_MAP.standard)
-
 function onFlowChange(flowId) {
-  // 深度研究流程强制 5 轮审稿
-  if (flowId === 'deep_research') {
-    form.maxReviewRounds = 5
-  }
+  if (flowId === 'deep_research') form.maxReviewRounds = 5
 }
 
 const isCoreLocked = computed(() => phase.value === 'writing' || phase.value === 'creating')
@@ -528,58 +505,44 @@ function getSections() {
   return form.sections.filter(s => s.trim())
 }
 
-// ===== 分步进度计算 =====
-function mapStepToProgressIndex(step) {
-  const name = (step.agentName || '').toLowerCase()
-  if (step.status === 'FAILED') return name.includes('写作') ? 7 : 9
-  const map = {
-    '连接': 0, '大纲': 1, '摘要': 2, '引言': 3,
-    '相关工作': 4, '文献': 4, '方法': 5, '实验': 6,
-    '结论': 7, '审稿': 8, '润色': 8, '完成': 9
+// ===== 动态进度：直接显示后端返回的实际步骤 =====
+const progressSteps = computed(() => {
+  const backendSteps = currentResult.value?.steps || []
+  // 连接中
+  if (backendSteps.length === 0 && phase.value === 'writing') {
+    return [{ key: 'connect', label: '正在连接写作引擎...', status: 'active', agentRole: null }]
   }
-  for (const [k, v] of Object.entries(map)) {
-    if (name.includes(k)) return v
+  // 已完成
+  if (phase.value === 'done') {
+    return backendSteps.map(s => ({
+      key: s.agentName + s.agentRole,
+      label: roleLabel(s.agentRole) + ' · ' + s.agentName,
+      status: 'done',
+      agentRole: s.agentRole
+    }))
   }
-  return -1
-}
+  // 进行中
+  return backendSteps.map(s => ({
+    key: s.agentName + s.agentRole,
+    label: roleLabel(s.agentRole) + ' · ' + s.agentName,
+    status: s.status === 'COMPLETED' ? 'done' : s.status === 'FAILED' ? 'error' : 'active',
+    agentRole: s.agentRole
+  }))
+})
 
 const progressStatusText = computed(() => {
-  const total = currentResult.value?.steps?.length || 0
+  const backendSteps = currentResult.value?.steps || []
+  const done = backendSteps.filter(s => s.status === 'COMPLETED').length
+  const total = backendSteps.length
   if (total === 0) return '正在连接写作引擎，请稍候...'
-  const activeStep = PROGRESS_STEPS.find(s => s.status === 'active')
-  if (activeStep) return `正在${activeStep.label}，预计还需 ${activeStep.estimatedTime || '片刻'}`
-  const doneSteps = PROGRESS_STEPS.filter(s => s.status === 'done').length
-  return `已完成 ${doneSteps} / ${PROGRESS_STEPS.length} 步`
+  if (phase.value === 'done') return `全部完成 · ${total} 步`
+  return `已完成 ${done} / ${total} 步`
 })
 
-const progressSteps = computed(() => {
-  const steps = PROGRESS_STEPS.map(s => ({ ...s, status: 'pending' }))
-  const completed = currentResult.value?.steps || []
-  if (phase.value === 'creating') { steps[0].status = 'active'; return steps }
-  if (sseConnected.value) steps[0].status = 'done'
-
-  completed.forEach((s) => {
-    const idx = mapStepToProgressIndex(s)
-    if (idx >= 0 && idx < steps.length) {
-      steps[idx].status = s.status === 'COMPLETED' ? 'done' : s.status === 'FAILED' ? 'error' : 'done'
-    }
-  })
-
-  if (phase.value === 'writing' && streamingText.value) {
-    const stepName = (streamingStepName.value || '').toLowerCase()
-    for (const [k, v] of Object.entries({
-      '大纲': 1, '摘要': 2, '引言': 3, '相关工作': 4, '文献': 4,
-      '方法': 5, '实验': 6, '结论': 7, '审稿': 8, '润色': 8
-    })) {
-      if (stepName.includes(k)) { steps[v].status = 'active'; break }
-    }
-  }
-
-  if (phase.value === 'done') {
-    steps.forEach(s => { if (s.status === 'pending') s.status = 'done' })
-  }
-  return steps
-})
+function roleLabel(role) {
+  const m = { SUPERVISOR: '导师', RESEARCHER: '研究员', WRITER: '写作者', REVIEWER: '审稿人', POLISHER: '润色师' }
+  return m[role] || role
+}
 
 function formatMs(ms) {
   if (!ms) return ''
@@ -601,11 +564,20 @@ function getRoleColor(role) {
 
 // ===== 挂载时恢复状态 =====
 onMounted(async () => {
-  // 加载可用流程列表（与断点恢复无关，始终执行）
   try {
     const res = await getFlowList()
     availableFlows.value = res.data || []
-  } catch (_) { /* 降级：下拉框为空，后端使用默认流程 */ }
+  } catch (_) {}
+
+  // 加载待执行论文列表
+  await loadPendingPapers()
+
+  // 支持从论文列表跳转过来（?paperId=xxx）
+  const queryPaperId = route.query.paperId
+  if (queryPaperId) {
+    selectedPaperId.value = Number(queryPaperId)
+    await onPaperSelect(selectedPaperId.value)
+  }
 
   const savedId = localStorage.getItem('paperai_paperId')
   const savedSteps = localStorage.getItem('paperai_steps')
@@ -682,20 +654,20 @@ async function handleWrite() {
   }
   lastRequest.value = reqData
 
-  // 1. 创建阶段
   phase.value = 'creating'
   currentResult.value = { steps: [] }
 
   try {
-    const createRes = await createPaper(reqData)
-
-    if (!createRes?.data?.paperId) {
-      throw new Error('未获取到论文ID')
+    let paperId
+    if (selectedPaperId.value) {
+      paperId = selectedPaperId.value
+    } else {
+      const createRes = await createPaper(reqData)
+      paperId = createRes?.data?.paperId
+      if (!paperId) throw new Error('未获取到论文ID')
     }
 
-    const paperId = createRes.data.paperId
-
-    // 2. 保存 paperId，触发 WebSocket 连接
+    // 2. 保存 paperId，触发 SSE 连接
     currentPaperId.value = paperId
     localStorage.setItem('paperai_paperId', paperId)
     localStorage.setItem('paperai_done', 'false')
@@ -764,34 +736,6 @@ function viewDetail() {
   overflow: hidden;
 }
 
-/* ===== 流程预览 ===== */
-.flow-preview {
-  margin-top: 8px;
-  padding: 8px 10px;
-  background: rgba(255,255,255,0.03);
-  border-radius: 6px;
-  border: 1px solid #f0f0f0;
-}
-.flow-preview-steps {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px;
-  font-size: 11px;
-}
-.flow-step-tag {
-  padding: 2px 6px;
-  border-radius: 10px;
-  background: rgba(24,144,255,0.08);
-  color: #1890ff;
-  font-weight: 500;
-  white-space: nowrap;
-}
-.flow-step-arrow {
-  color: #bbb;
-  font-size: 10px;
-  margin: 0 2px;
-}
 .write-paper :deep(.ant-row) {
   height: 100%;
 }

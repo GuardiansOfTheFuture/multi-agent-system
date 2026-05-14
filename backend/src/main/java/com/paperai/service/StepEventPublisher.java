@@ -72,6 +72,13 @@ public class StepEventPublisher {
     }
 
     /**
+     * 推送单个节点的执行状态（FlowEngine 使用，包含 nodeId 供画布染色）
+     */
+    public void publishNodeStatus(Long paperId, Map<String, Object> payload) {
+        sendEvent(paperId, "node", payload);
+    }
+
+    /**
      * 推送完成事件，并关闭所有 emitter
      */
     public void publishComplete(Long paperId) {

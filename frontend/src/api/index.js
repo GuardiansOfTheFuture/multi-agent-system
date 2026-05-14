@@ -104,7 +104,15 @@ export function chatWithAgent(agentName, topic, message) {
   return request.post(`/agent/${agentName}/chat`, null, { params: { topic, message } })
 }
 export function healthCheck() { return request.get('/paper/health') }
-export function getFlowList() { return request.get('/paper/flow/list') }
+
+// ===== 流程管理 =====
+export function getFlowList() { return request.get('/flow/list') }  // 兼容旧调用
+export function listFlows() { return request.get('/flow/list') }
+export function getFlow(id) { return request.get(`/flow/${id}`) }
+export function createFlow(data) { return request.post('/flow', data) }
+export function updateFlow(id, data) { return request.put(`/flow/${id}`, data) }
+export function deleteFlow(id) { return request.delete(`/flow/${id}`) }
+export function duplicateFlow(id) { return request.post(`/flow/${id}/duplicate`) }
 
 // ===== 版本管理 =====
 export function getPaperVersions(paperId) { return request.get(`/paper/${paperId}/versions`) }

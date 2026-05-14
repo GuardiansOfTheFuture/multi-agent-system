@@ -3,7 +3,6 @@ package com.paperai.controller;
 import com.paperai.agent.ResearcherAgent;
 import com.paperai.model.ResearchResult;
 import com.paperai.model.dto.PaperWritingRequestDTO;
-import com.paperai.model.flow.FlowProfile;
 import com.paperai.model.dto.ResearchRequestDTO;
 import com.paperai.model.entity.Paper;
 import com.paperai.model.entity.PaperVersion;
@@ -71,9 +70,11 @@ public class PaperController {
         Thread.startVirtualThread(() -> {
             try {
                 orchestratorService.executeAsync(paperId, request);
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 log.error("异步写作异常: paperId={}, {}", paperId, e.getMessage(), e);
-                stepEventPublisher.publishError(paperId, e.getMessage());
+                try {
+                    stepEventPublisher.publishError(paperId, e.getMessage() != null ? e.getMessage() : "写作异常");
+                } catch (Throwable ignored) {}
             }
         });
         Map<String, Object> result = new HashMap<>();
@@ -281,18 +282,6 @@ public class PaperController {
     @GetMapping("/health")
     public ApiResultVO<String> health() {
         return ApiResultVO.success("PaperAI Backend is running");
-    }
-
-    @GetMapping("/flow/list")
-    public ApiResultVO<List<Map<String, Object>>> flowList() {
-        List<Map<String, Object>> list = FlowProfile.listAll().stream().map(f -> {
-            Map<String, Object> m = new HashMap<>();
-            m.put("id", f.getId());
-            m.put("name", f.getName());
-            m.put("description", f.getDescription());
-            return m;
-        }).toList();
-        return ApiResultVO.success(list);
     }
 
     /** 从 Authentication 提取 userId */

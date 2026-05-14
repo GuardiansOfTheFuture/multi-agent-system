@@ -90,7 +90,7 @@ const route = useRoute()
 const store = useUserStore()
 
 const collapsed = ref(false)
-const selectedKeys = ref(['/write'])
+const selectedKeys = ref([route.path])
 const pageTitle = computed(() => route.meta?.title || 'PaperAI')
 
 function handleMenuClick({ key }) {

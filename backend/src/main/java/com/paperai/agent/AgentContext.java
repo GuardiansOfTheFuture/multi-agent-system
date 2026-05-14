@@ -56,6 +56,12 @@ public class AgentContext {
     /** 额外自定义数据 */
     private final Map<String, Object> attributes = new ConcurrentHashMap<>();
 
+    /** 各节点输出（nodeId → 输出文本），条件节点用此获取上一节点输出做评分判断 */
+    private final Map<String, String> nodeOutputs = new ConcurrentHashMap<>();
+
+    public void putNodeOutput(String nodeId, String output) { nodeOutputs.put(nodeId, output); }
+    public String getNodeOutput(String nodeId) { return nodeOutputs.get(nodeId); }
+
     /** 创建时间 */
     private final LocalDateTime createdAt;
 

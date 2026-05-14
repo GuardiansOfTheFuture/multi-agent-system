@@ -3,6 +3,7 @@ package com.paperai.service;
 import com.paperai.agent.*;
 import com.paperai.agent.base.BaseAgent;
 import com.paperai.model.dto.PaperWritingRequestDTO;
+import com.paperai.model.entity.FlowDefinition;
 import com.paperai.model.entity.Paper;
 import com.paperai.model.entity.Task;
 import com.paperai.model.enums.AgentRole;
@@ -14,15 +15,13 @@ import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
- * 编排引擎 — 将 5 个 Agent 串成完整论文写作流程。
- * 每步通过 WebSocket STOMP 逐 token 流式推送到前端。
+ * 编排引擎 — 根据流程定义（预设 FlowProfile 或自定义 FlowDefinition）串行执行 Agent。
+ * 每步通过 SSE 逐 token 流式推送到前端。
  */
 @Slf4j
 @Service
@@ -44,6 +43,10 @@ public class OrchestratorService {
     private AgentTaskService agentTaskService;
     @Resource
     private StepEventPublisher stepEventPublisher;
+    @Resource
+    private FlowDefinitionService flowDefinitionService;
+    @Resource
+    private FlowEngine flowEngine;
 
     private int stepSeq = 0;
     private Consumer<PaperWritingVO.StepRecordVO> stepCallback = null;
@@ -93,13 +96,21 @@ public class OrchestratorService {
      * 异步执行（WebSocket 实时推送）
      */
     public void executeAsync(Long paperId, PaperWritingRequestDTO req) {
+        // 自定义流程 → FlowEngine 执行
+        if (isCustomFlow(req.getFlowId())) {
+            Long dbId = Long.parseLong(req.getFlowId().substring(7));
+            FlowDefinition def = flowDefinitionService.getById(dbId);
+            flowEngine.execute(paperId, def, req);
+            return;
+        }
+        // 预设流程 → 标准执行
         this.stepCallback = null;
         this.stepSeq = 0;
-        runningTasks.put(paperId, false); // 标记运行中
+        runningTasks.put(paperId, false);
         AgentContext ctx = new AgentContext(UUID.randomUUID().toString(), req.getTopic());
         List<PaperWritingVO.StepRecordVO> steps = new ArrayList<>();
         long start = System.currentTimeMillis();
-        FlowProfile flow = FlowProfile.fromId(req.getFlowId());
+        FlowProfile flow = resolveFlow(req.getFlowId());
 
         log.info("===== 异步写作开始 paperId={}, flow={} =====", paperId, flow.getId());
         try {
@@ -113,7 +124,7 @@ public class OrchestratorService {
             } else {
                 log.error("异步写作异常 paperId={}: {}", paperId, e.getMessage(), e);
                 paperService.updateStatus(paperId, Constants.PAPER_STATUS_FAILED);
-                stepEventPublisher.publishError(paperId, e.getMessage());
+                stepEventPublisher.publishError(paperId, e.getMessage() != null ? e.getMessage() : "写作异常");
             }
         } finally {
             runningTasks.remove(paperId);
@@ -127,7 +138,7 @@ public class OrchestratorService {
         Long paperId = paper.getId();
         AgentContext ctx = new AgentContext(UUID.randomUUID().toString(), req.getTopic());
         List<PaperWritingVO.StepRecordVO> steps = new ArrayList<>();
-        FlowProfile flow = FlowProfile.fromId(req.getFlowId());
+        FlowProfile flow = resolveFlow(req.getFlowId());
 
         try {
             runSteps(paperId, ctx, req, steps, flow);
@@ -143,7 +154,7 @@ public class OrchestratorService {
      */
     private void runSteps(Long paperId, AgentContext ctx, PaperWritingRequestDTO req,
                           List<PaperWritingVO.StepRecordVO> steps, FlowProfile flow) {
-        ctx.setAttribute("direction", req.getDescription());
+        ctx.setAttribute("direction", req.getDescription() != null ? req.getDescription() : "");
 
         // 1. 选题评估
         if (flow.isTopicEvaluation()) {
@@ -207,6 +218,20 @@ public class OrchestratorService {
             step(paperId, "最终审核", AgentRole.SUPERVISOR, steps, supervisorAgent, ctx,
                 () -> supervisorAgent.finalReview(ctx));
         }
+    }
+
+    /**
+     * 解析 flowId → FlowProfile。预设走枚举值，自定义流程返回 STANDARD 作为信号
+     * 值（实际执行由 executeAsync 委托给 FlowEngine）。
+     */
+    private FlowProfile resolveFlow(String flowId) {
+        FlowProfile preset = FlowProfile.fromIdRaw(flowId);
+        return preset != null ? preset : FlowProfile.STANDARD;
+    }
+
+    /** flowId 是否是自定义流程（需 FlowEngine 执行） */
+    private boolean isCustomFlow(String flowId) {
+        return flowId != null && flowId.startsWith("custom-");
     }
 
     private PaperWritingVO finish(Long paperId, AgentContext ctx, long start, List<PaperWritingVO.StepRecordVO> steps) {

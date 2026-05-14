@@ -1,8 +1,8 @@
 package com.paperai.handler;
 
 import com.paperai.common.BusinessException;
-import com.paperai.common.Result;
 import com.paperai.common.ResultCode;
+import com.paperai.model.vo.ApiResultVO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -27,9 +27,9 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(BusinessException.class)
     @ResponseStatus(HttpStatus.OK)
-    public Result<Void> handleBusinessException(BusinessException e) {
+    public ApiResultVO<Void> handleBusinessException(BusinessException e) {
         log.warn("业务异常: code={}, message={}", e.getCode(), e.getMessage());
-        return Result.error(e.getCode(), e.getMessage());
+        return ApiResultVO.error(e.getCode(), e.getMessage());
     }
 
     /**
@@ -37,9 +37,9 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(IllegalArgumentException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
-    public Result<Void> handleIllegalArgument(IllegalArgumentException e) {
+    public ApiResultVO<Void> handleIllegalArgument(IllegalArgumentException e) {
         log.warn("参数异常: {}", e.getMessage());
-        return Result.error(ResultCode.BAD_REQUEST, e.getMessage());
+        return ApiResultVO.error(ResultCode.BAD_REQUEST.getCode(), e.getMessage());
     }
 
     /**
@@ -48,10 +48,10 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(RuntimeException.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
-    public Result<Void> handleRuntimeException(RuntimeException e) {
+    public ApiResultVO<Void> handleRuntimeException(RuntimeException e) {
         String friendlyMsg = extractFriendlyMessage(e);
         log.error("运行时异常: {}", friendlyMsg, e);
-        return Result.error(ResultCode.INTERNAL_ERROR.getCode(), friendlyMsg);
+        return ApiResultVO.error(ResultCode.INTERNAL_ERROR.getCode(), friendlyMsg);
     }
 
     /**
@@ -59,10 +59,10 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(Exception.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
-    public Result<Void> handleException(Exception e) {
+    public ApiResultVO<Void> handleException(Exception e) {
         String friendlyMsg = extractFriendlyMessage(e);
         log.error("系统异常: {}", friendlyMsg, e);
-        return Result.error(ResultCode.INTERNAL_ERROR.getCode(), friendlyMsg);
+        return ApiResultVO.error(ResultCode.INTERNAL_ERROR.getCode(), friendlyMsg);
     }
 
     // ===== 辅助方法 =====

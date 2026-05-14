@@ -1,11 +1,14 @@
 package com.paperai.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.paperai.common.BusinessException;
 import com.paperai.common.ResultCode;
 import com.paperai.mapper.PaperMapper;
 import com.paperai.mapper.PaperVersionMapper;
+import com.paperai.mapper.TaskMapper;
 import com.paperai.model.entity.Paper;
 import com.paperai.model.entity.PaperVersion;
+import com.paperai.model.entity.Task;
 import com.paperai.model.dto.PaperWritingRequestDTO;
 import com.paperai.service.PaperService;
 import jakarta.annotation.Resource;
@@ -24,6 +27,9 @@ public class PaperServiceImpl implements PaperService {
 
     @Resource
     private PaperVersionMapper paperVersionMapper;
+
+    @Resource
+    private TaskMapper taskMapper;
 
     @Override
     public Paper createPaper(PaperWritingRequestDTO request, Long userId) {
@@ -86,8 +92,15 @@ public class PaperServiceImpl implements PaperService {
     }
 
     @Override
+    @Transactional
     public void deletePaper(Long id) {
+        // 级联删除版本记录
+        paperVersionMapper.delete(new LambdaQueryWrapper<PaperVersion>().eq(PaperVersion::getPaperId, id));
+        // 级联删除任务记录
+        taskMapper.delete(new LambdaQueryWrapper<Task>().eq(Task::getPaperId, id));
+        // 删除论文本身
         paperMapper.deleteById(id);
+        log.info("删除论文及关联数据: id={}", id);
     }
 
     // ===== 版本管理 =====
