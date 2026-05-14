@@ -69,10 +69,13 @@ public class PaperServiceImpl implements PaperService {
     }
 
     @Override
-    public void updateContent(Long id, String content) {
-        Paper paper = getPaperById(id);
-        paper.setContent(content);
-        paperMapper.updateById(paper);
+    public void updateContent(Long id, Integer versionNo, String content) {
+        PaperVersion pv = paperVersionMapper.findByPaperIdAndVersion(id, versionNo);
+        if (pv != null) {
+            pv.setContent(content);
+            pv.setWordCount(content != null ? content.length() : 0);
+            paperVersionMapper.updateById(pv);
+        }
     }
 
     @Override
@@ -92,6 +95,13 @@ public class PaperServiceImpl implements PaperService {
     @Override
     @Transactional
     public PaperVersion saveVersion(Long paperId, String stage, String summary, String content) {
+        return saveVersion(paperId, stage, summary, content, null, null);
+    }
+
+    @Override
+    @Transactional
+    public PaperVersion saveVersion(Long paperId, String stage, String summary, String content,
+                                    String editType, String changeSummary) {
         Integer nextNo = paperVersionMapper.nextVersionNo(paperId);
 
         PaperVersion pv = new PaperVersion();
@@ -101,15 +111,17 @@ public class PaperServiceImpl implements PaperService {
         pv.setSummary(summary);
         pv.setContent(content);
         pv.setWordCount(content != null ? content.length() : 0);
+        pv.setEditType(editType != null ? editType : "MANUAL");
+        pv.setChangeSummary(changeSummary);
         paperVersionMapper.insert(pv);
 
         // 更新 paper 表 current_version
         Paper paper = getPaperById(paperId);
         paper.setCurrentVersion(nextNo);
-        paper.setContent(content);
         paperMapper.updateById(paper);
 
-        log.info("保存论文版本: paperId={}, version={}, stage={}, {}字", paperId, nextNo, stage, pv.getWordCount());
+        log.info("保存论文版本: paperId={}, version={}, stage={}, editType={}, {}字",
+                paperId, nextNo, stage, pv.getEditType(), pv.getWordCount());
         return pv;
     }
 

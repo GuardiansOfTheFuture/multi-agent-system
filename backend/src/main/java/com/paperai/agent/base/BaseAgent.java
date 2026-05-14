@@ -1,6 +1,8 @@
 package com.paperai.agent.base;
 
 import com.paperai.agent.AgentContext;
+import com.paperai.common.BusinessException;
+import com.paperai.common.ResultCode;
 import com.paperai.model.enums.AgentMessageType;
 import com.paperai.model.enums.AgentRole;
 import com.paperai.model.enums.TaskStatus;
@@ -22,6 +24,9 @@ import org.springframework.ai.chat.client.ChatClient;
  */
 @Slf4j
 public abstract class BaseAgent {
+
+    /** LLM 调用异常的 ErrorCode */
+    private static final int AI_CALL_ERROR_CODE = ResultCode.AI_SERVICE_ERROR.getCode();
 
 
     /** 当前 Agent 的角色 */
@@ -72,16 +77,22 @@ public abstract class BaseAgent {
      * 请求/响应详情由 LoggerAdvisor 统一记录，此处只记 Agent 层面的启动和完成
      */
     protected String callLlm(String userMessage) {
-        String response = chatClient.prompt()
-                .system(getSystemPrompt())
-                .user(userMessage)
-                .call()
-                .content();
+        try {
+            String response = chatClient.prompt()
+                    .system(getSystemPrompt())
+                    .user(userMessage)
+                    .call()
+                    .content();
 
-        log.info("[{}] LLM 响应完成，长度: {}", role.getDisplayName(),
-                response != null ? response.length() : 0);
+            log.info("[{}] LLM 响应完成，长度: {}", role.getDisplayName(),
+                    response != null ? response.length() : 0);
 
-        return response;
+            return response;
+        } catch (Exception e) {
+            log.error("[{}] LLM 调用失败", role.getDisplayName(), e);
+            throw new BusinessException(AI_CALL_ERROR_CODE,
+                    "AI 服务(" + role.getDisplayName() + ")调用失败：" + extractShortMessage(e));
+        }
     }
 
     /**
@@ -94,20 +105,43 @@ public abstract class BaseAgent {
     protected String callLlmStream(String userMessage, java.util.function.Consumer<String> onToken) {
         StringBuilder full = new StringBuilder();
 
-        String response = chatClient.prompt()
-                .system(getSystemPrompt())
-                .user(userMessage)
-                .stream()
-                .content()
-                .doOnNext(chunk -> {
-                    full.append(chunk);
-                    onToken.accept(full.toString());
-                })
-                .blockLast(); // 等待流结束，返回最后一片
+        try {
+            String response = chatClient.prompt()
+                    .system(getSystemPrompt())
+                    .user(userMessage)
+                    .stream()
+                    .content()
+                    .doOnNext(chunk -> {
+                        full.append(chunk);
+                        onToken.accept(full.toString());
+                    })
+                    .blockLast(); // 等待流结束，返回最后一片
 
-        String result = full.toString();
-        log.info("[{}] LLM 流式响应完成，长度: {}", role.getDisplayName(), result.length());
-        return result;
+            String result = full.toString();
+            log.info("[{}] LLM 流式响应完成，长度: {}", role.getDisplayName(), result.length());
+            return result;
+        } catch (Exception e) {
+            log.error("[{}] LLM 流式调用失败", role.getDisplayName(), e);
+            throw new BusinessException(AI_CALL_ERROR_CODE,
+                    "AI 服务(" + role.getDisplayName() + ")流式调用失败：" + extractShortMessage(e));
+        }
+    }
+
+    /**
+     * 从异常堆栈提取简短信息，避免暴露原始 JSON
+     */
+    private String extractShortMessage(Throwable e) {
+        if (e == null) return "未知错误";
+        // 优先取最内层 cause 的信息
+        Throwable cause = e;
+        while (cause.getCause() != null && cause.getCause() != cause) {
+            cause = cause.getCause();
+        }
+        String msg = cause.getMessage();
+        if (msg == null) msg = e.getMessage();
+        if (msg == null) return "未知错误";
+        // 截断过长消息
+        return msg.length() > 150 ? msg.substring(0, 150) + "..." : msg;
     }
 
     /**

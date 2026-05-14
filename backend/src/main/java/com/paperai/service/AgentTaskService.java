@@ -16,7 +16,7 @@ public interface AgentTaskService {
     /**
      * 创建任务
      */
-    Task createTask(Long paperId, String agentRole, Integer sortOrder, String description);
+    Task createTask(Long paperId, String agentRole, Integer sortOrder, String description, Integer versionNo);
 
     /**
      * 更新任务状态

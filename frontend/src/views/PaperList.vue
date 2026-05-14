@@ -100,3 +100,40 @@ async function handleDelete(id) {
   }
 }
 </script>
+
+<style scoped>
+.paper-list {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.paper-list :deep(.ant-card) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.paper-list :deep(.ant-card-body) {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 24px;
+}
+.paper-list :deep(.ant-table-wrapper) {
+  height: 100%;
+}
+.paper-list :deep(.ant-table) {
+  height: 100%;
+}
+.paper-list :deep(.ant-table-container) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.paper-list :deep(.ant-table-header) {
+  flex-shrink: 0;
+}
+.paper-list :deep(.ant-table-body) {
+  flex: 1;
+  overflow-y: auto !important;
+}
+</style>

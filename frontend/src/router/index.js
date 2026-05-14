@@ -41,6 +41,12 @@ const routes = [
         name: 'AgentList',
         component: () => import('@/views/AgentList.vue'),
         meta: { title: 'Agent 配置' }
+      },
+      {
+        path: 'flow',
+        name: 'FlowCanvas',
+        component: () => import('@/views/FlowCanvas.vue'),
+        meta: { title: '流程画布' }
       }
     ]
   }

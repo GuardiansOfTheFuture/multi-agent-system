@@ -30,4 +30,7 @@ public class PaperWritingRequestDTO {
 
     /** 最大审稿迭代轮次 */
     private Integer maxReviewRounds = 3;
+
+    /** 写作流程ID（为空时使用标准流程） */
+    private String flowId;
 }

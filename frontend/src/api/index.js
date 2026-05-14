@@ -24,15 +24,65 @@ request.interceptors.response.use(
         localStorage.removeItem('paperai_user')
         window.location.href = '/login'
       }
-      return Promise.reject(new Error(res.message || '请求失败'))
+      // 提取友好错误消息
+      const friendlyMsg = extractErrorMessage(res)
+      return Promise.reject(new Error(friendlyMsg))
     }
     return res
   },
   error => {
     console.error('Request Error:', error.message)
-    return Promise.reject(error)
+    // 网络错误或 HTTP 错误
+    let userMsg = '网络请求失败，请检查网络连接'
+    if (error.response) {
+      const res = error.response.data
+      if (res && res.message) {
+        userMsg = res.message
+      } else if (error.response.status === 404) {
+        userMsg = '请求的资源不存在'
+      } else if (error.response.status === 500) {
+        userMsg = '服务器内部错误，请稍后重试'
+      } else if (error.response.status >= 400) {
+        userMsg = '请求失败 (' + error.response.status + ')'
+      }
+    } else if (error.code === 'ECONNABORTED') {
+      userMsg = '请求超时，AI 服务响应较慢，请稍后重试'
+    }
+    return Promise.reject(new Error(userMsg))
   }
 )
+
+/**
+ * 从后端返回的 Result 对象中提取对用户友好的错误消息
+ */
+function extractErrorMessage(res) {
+  if (!res) return '未知错误'
+  let msg = res.message || '请求失败'
+
+  // 去掉 HTTP 状态码前缀（如 "400 - "）
+  msg = msg.replace(/^\d{3}\s*-?\s*/, '').trim()
+
+  // 尝试解析 DashScope JSON 格式的错误
+  const dashScopeMatch = msg.match(/"code"\s*:\s*"([^"]+)"\s*,\s*"message"\s*:\s*"([^"]+)"/
+  )
+  if (dashScopeMatch) {
+    const dCode = dashScopeMatch[1]
+    const dMsg = dashScopeMatch[2]
+    if (dCode === 'InvalidParameter') {
+      return 'AI 模型参数错误，请检查模型名称和配置'
+    }
+    if (dCode === 'InvalidApiKey') {
+      return 'AI 服务密钥无效，请联系管理员'
+    }
+    return 'AI 服务错误：' + dMsg
+  }
+
+  // 截断过长的错误消息
+  if (msg.length > 150) {
+    msg = msg.substring(0, 150) + '...'
+  }
+  return msg
+}
 
 // ===== 认证 =====
 export function login(data) { return request.post('/auth/login', data) }
@@ -54,5 +104,22 @@ export function chatWithAgent(agentName, topic, message) {
   return request.post(`/agent/${agentName}/chat`, null, { params: { topic, message } })
 }
 export function healthCheck() { return request.get('/paper/health') }
+export function getFlowList() { return request.get('/paper/flow/list') }
+
+// ===== 版本管理 =====
+export function getPaperVersions(paperId) { return request.get(`/paper/${paperId}/versions`) }
+export function getPaperVersion(paperId, versionNo) { return request.get(`/paper/${paperId}/versions/${versionNo}`) }
+export function getLatestVersion(paperId) { return request.get(`/paper/${paperId}/versions/latest`) }
+
+// ===== 手动编辑 & Agent 修改 =====
+export function updatePaperContent(paperId, versionNo, content) {
+  return request.put(`/paper/${paperId}/content`, { versionNo, content })
+}
+export function agentEditPaper(paperId, selectedText, instruction) {
+  return request.post(`/paper/${paperId}/agent-edit`, { selectedText, instruction })
+}
+export function savePaperVersion(paperId, content, summary, editType = 'MANUAL', changeSummary = '') {
+  return request.post(`/paper/${paperId}/versions`, { content, summary, editType, changeSummary })
+}
 
 export default request

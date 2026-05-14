@@ -34,7 +34,8 @@ public class Paper {
     /** 论文状态（DRAFT/REVIEWING/PUBLISHED） */
     private String status;
 
-    /** 最终内容 */
+    /** 最终内容（仅运行时从版本表填充，不持久化到 paper 表） */
+    @TableField(exist = false)
     private String content;
 
     private Long userId;

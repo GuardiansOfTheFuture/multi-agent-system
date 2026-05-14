@@ -25,6 +25,9 @@ public class Task {
     /** Agent 角色编码 */
     private String agentRole;
 
+    /** 关联版本号 */
+    private Integer versionNo;
+
     /** 执行顺序 */
     private Integer sortOrder;
 

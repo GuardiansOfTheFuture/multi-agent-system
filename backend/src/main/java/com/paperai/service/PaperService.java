@@ -18,13 +18,16 @@ public interface PaperService {
 
     void checkOwner(Long paperId, Long userId);
 
-    void updateContent(Long id, String content);
+    void updateContent(Long id, Integer versionNo, String content);
 
     void updateStatus(Long id, String status);
 
     void deletePaper(Long id);
 
     PaperVersion saveVersion(Long paperId, String stage, String summary, String content);
+
+    PaperVersion saveVersion(Long paperId, String stage, String summary, String content,
+                             String editType, String changeSummary);
 
     List<PaperVersion> getVersions(Long paperId);
 

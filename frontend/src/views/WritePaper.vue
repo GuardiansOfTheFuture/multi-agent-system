@@ -3,22 +3,54 @@
     <a-row :gutter="16">
       <!-- 左侧：表单 -->
       <a-col :span="9">
-        <a-card title="📝 论文写作" :bordered="false">
+        <a-card :bordered="false">
           <a-form :model="form" layout="vertical">
+            <!-- 流程选择 -->
+            <a-form-item label="写作流程">
+              <a-select
+                v-model:value="selectedFlowId"
+                :disabled="isCoreLocked"
+                @change="onFlowChange"
+              >
+                <a-select-option
+                  v-for="flow in availableFlows"
+                  :key="flow.id"
+                  :value="flow.id"
+                >
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <span>{{ flow.name }}</span>
+                    <span style="color:#999;font-size:11px">{{ flow.description }}</span>
+                  </div>
+                </a-select-option>
+              </a-select>
+              <div v-if="selectedFlowDef" class="flow-preview">
+                <div class="flow-preview-steps">
+                  <template v-for="(step, i) in selectedFlowDef.steps" :key="i">
+                    <span class="flow-step-tag">{{ step.icon }} {{ step.name }}</span>
+                    <span v-if="i < selectedFlowDef.steps.length - 1" class="flow-step-arrow">→</span>
+                  </template>
+                </div>
+              </div>
+            </a-form-item>
+
             <a-form-item label="论文主题" required>
               <a-input
                 v-model:value="form.topic"
                 placeholder="如：深度学习在医疗影像分割中的应用"
-                :disabled="phase !== 'idle'"
+                :disabled="isCoreLocked"
               />
+              <div v-if="isCoreLocked" style="color: #faad14; font-size: 11px; margin-top: 2px">
+                ⚠ 修改核心参数将重新开始写作，已生成内容将丢失
+              </div>
             </a-form-item>
 
             <a-form-item label="详细描述">
               <a-textarea
                 v-model:value="form.description"
-                :rows="3"
-                placeholder="研究方向、核心问题、预期贡献..."
-                :disabled="phase !== 'idle'"
+                :rows="5"
+                :auto-size="{ minRows: 3, maxRows: 8 }"
+                placeholder="建议填写：研究背景与意义、核心研究问题、采用的研究方法、预期的创新点和贡献"
+                :disabled="phase !== 'idle' && phase !== 'writing'"
               />
             </a-form-item>
 
@@ -26,39 +58,97 @@
               <a-input
                 v-model:value="form.keywords"
                 placeholder="用逗号分隔，如：深度学习,医疗影像,图像分割"
-                :disabled="phase !== 'idle'"
+                :disabled="phase !== 'idle' && phase !== 'writing'"
               />
             </a-form-item>
 
+            <!-- 章节设置 — 可编辑列表 -->
             <a-form-item label="章节设置">
               <a-select
-                v-model:value="form.sectionPreset"
-                @change="handleSectionChange"
-                :disabled="phase !== 'idle'"
+                v-model:value="selectedTemplate"
+                @change="applyTemplate"
+                placeholder="选择论文模板..."
+                size="small"
+                style="margin-bottom: 8px"
+                :disabled="isCoreLocked"
               >
-                <a-select-option value="default">默认章节（摘要/引言/相关工作/方法/实验/结论）</a-select-option>
-                <a-select-option value="custom">自定义章节</a-select-option>
+                <a-select-option value="">自定义章节</a-select-option>
+                <a-select-option value="bachelor">本科毕业论文</a-select-option>
+                <a-select-option value="master">硕士论文</a-select-option>
+                <a-select-option value="journal">期刊论文</a-select-option>
+                <a-select-option value="conference">会议论文</a-select-option>
               </a-select>
-              <a-input
-                v-if="form.sectionPreset === 'custom'"
-                v-model:value="form.customSections"
-                placeholder="用逗号分隔章节名"
-                style="margin-top: 8px"
-                :disabled="phase !== 'idle'"
-              />
+
+              <div class="section-list">
+                <div
+                  v-for="(section, index) in form.sections"
+                  :key="index"
+                  class="section-item"
+                >
+                  <span class="section-drag-handle">☰</span>
+                  <a-input
+                    v-model:value="form.sections[index]"
+                    size="small"
+                    :disabled="isCoreLocked"
+                    style="flex: 1"
+                  />
+                  <a-button
+                    v-if="!isCoreLocked"
+                    type="text"
+                    danger
+                    size="small"
+                    @click="removeSection(index)"
+                    :disabled="form.sections.length <= 1"
+                  >×</a-button>
+                </div>
+                <a-button
+                  v-if="!isCoreLocked"
+                  type="dashed"
+                  size="small"
+                  block
+                  @click="addSection"
+                  style="margin-top: 4px"
+                >+ 添加章节</a-button>
+              </div>
             </a-form-item>
 
+            <!-- 附加要求 -->
             <a-form-item label="附加要求">
               <a-textarea
                 v-model:value="form.requirements"
-                :rows="2"
-                placeholder="如：需要引用近三年顶会论文，重点分析...的技术"
-                :disabled="phase !== 'idle'"
+                :rows="3"
+                :auto-size="{ minRows: 2, maxRows: 6 }"
+                placeholder="如：需要引用近 3 年的 SCI 论文；字数控制在 8000 字左右；重点分析 XX 技术的优缺点"
+                :disabled="phase !== 'idle' && phase !== 'writing'"
               />
             </a-form-item>
 
+            <!-- 审稿迭代轮次 -->
             <a-form-item label="审稿迭代轮次">
-              <a-slider v-model:value="form.maxReviewRounds" :min="1" :max="5" :disabled="phase !== 'idle'" />
+              <a-row :gutter="8" align="middle">
+                <a-col :span="2">
+                  <span class="slider-label">1 轮</span>
+                </a-col>
+                <a-col :span="16">
+                  <a-slider
+                    v-model:value="form.maxReviewRounds"
+                    :min="1"
+                    :max="5"
+                    :disabled="phase !== 'idle' && phase !== 'writing'"
+                  />
+                </a-col>
+                <a-col :span="2">
+                  <span class="slider-label">5 轮</span>
+                </a-col>
+                <a-col :span="4" style="text-align: center">
+                  <a-tag color="blue" style="font-size: 13px; font-weight: 600">
+                    {{ form.maxReviewRounds }} 轮
+                  </a-tag>
+                </a-col>
+              </a-row>
+              <div style="color: #999; font-size: 11px; margin-top: 2px">
+                AI 将自动对生成的论文进行多轮审稿和修改，轮次越多质量越高但耗时越长
+              </div>
             </a-form-item>
 
             <a-form-item>
@@ -71,15 +161,37 @@
                 @click="handleWrite"
               >
                 <template #icon><send-outlined /></template>
-                {{ phase === 'creating' ? '创建论文中...' : phase === 'writing' ? '论文写作中...' : '开始写作' }}
+                开始写作
               </a-button>
             </a-form-item>
             <a-form-item v-if="phase === 'writing'">
-              <a-button danger size="large" block @click="handleStop">
+              <a-button danger size="large" block @click="showStopConfirm = true">
                 <template #icon><stop-outlined /></template>
                 停止写作
               </a-button>
             </a-form-item>
+            <a-form-item v-if="phase === 'writing' || phase === 'done' || phase === 'error'">
+              <a-button size="large" block @click="resetToIdle">
+                <template #icon><sync-outlined /></template>
+                重置页面
+              </a-button>
+            </a-form-item>
+            <!-- 停止写作确认弹窗 -->
+            <a-modal
+              v-model:open="showStopConfirm"
+              title="确认停止写作"
+              ok-text="确认停止"
+              cancel-text="取消"
+              ok-type="danger"
+              @ok="handleStop"
+            >
+              <p>停止后已生成的内容将保存为当前版本，您可以稍后继续编辑。</p>
+            </a-modal>
+
+            <!-- 写作中参数修改提示 -->
+            <div v-if="phase === 'writing' && paramModified" class="param-hint">
+              💡 参数已修改，将在当前步骤完成后生效
+            </div>
           </a-form>
         </a-card>
       </a-col>
@@ -107,24 +219,47 @@
               <span style="display: flex; align-items: center; gap: 8px">
                 <sync-outlined v-if="phase === 'writing'" spin style="color: #1890ff" />
                 <check-circle-outlined v-else style="color: #52c41a" />
-                <span>
-                  {{ phase === 'writing'
-                    ? `论文写作中 (已完成 ${(currentResult?.steps?.length) || 0} 步)`
-                    : `写作完成 (共 ${(currentResult?.steps?.length) || 0} 步)` }}
-                </span>
+                <span>{{ phase === 'writing' ? '论文写作中' : '写作完成' }}</span>
+                <a-tag v-if="!sseConnected && phase === 'writing'" color="orange" size="small">
+                  正在连接服务器
+                </a-tag>
               </span>
             </template>
-            <template #extra>
-              <a-tag v-if="!wsConnected && phase === 'writing'" color="orange">
-                <loading-outlined spin style="margin-right: 4px" />WS 连接中
-              </a-tag>
-              <a-space v-if="phase === 'done'">
-                <a-button type="link" size="small" @click="viewDetail">查看最终结果 →</a-button>
-                <a-button size="small" @click="resetToIdle">开始新的写作</a-button>
-              </a-space>
-            </template>
 
-            <!-- 流式文本实时展示（当前步骤正在生成时） -->
+            <!-- ====== 分步进度指示器 ====== -->
+            <div class="progress-section">
+              <div class="progress-status-text" v-if="phase === 'writing'">
+                {{ progressStatusText }}
+              </div>
+              <div class="step-timeline">
+                <div
+                  v-for="(step, index) in progressSteps"
+                  :key="step.key"
+                  class="step-node"
+                  :class="{
+                    'step-active': step.status === 'active',
+                    'step-done': step.status === 'done',
+                    'step-pending': step.status === 'pending',
+                    'step-error': step.status === 'error'
+                  }"
+                >
+                  <div class="step-indicator">
+                    <loading-outlined v-if="step.status === 'active'" spin class="step-spin" />
+                    <check-circle-filled v-else-if="step.status === 'done'" style="color: #52c41a" />
+                    <close-circle-filled v-else-if="step.status === 'error'" style="color: #ff4d4f" />
+                    <span v-else class="step-dot" />
+                  </div>
+                  <div class="step-info">
+                    <div class="step-label">{{ step.label }}</div>
+                    <div class="step-sub" v-if="step.status === 'active' && step.estimatedTime">
+                      {{ step.estimatedTime }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 流式文本实时展示 -->
             <div v-if="streamingText" style="padding: 0 0 16px 0">
               <a-card size="small" :title="`🤖 ${streamingStepName} - 实时生成中...`" :bordered="true">
                 <div class="ai-output-body" style="max-height: 45vh; overflow-y: auto">
@@ -133,20 +268,14 @@
               </a-card>
             </div>
 
-            <!-- 等待第一个步骤或处于连接中 — 有流式文本就不显示了 -->
-            <div v-if="!(currentResult?.steps?.length) && !streamingText && wsConnected" style="padding: 32px 0; text-align: center; color: #999">
-              <loading-outlined spin style="font-size: 24px; margin-bottom: 12px; display: block" />
+            <!-- 等待第一个步骤或处于连接中 -->
+            <div v-if="!(currentResult?.steps?.length) && !streamingText && sseConnected" class="waiting-hint">
+              <loading-outlined spin style="font-size: 20px; margin-bottom: 8px; display: block" />
               <span>正在等待写作引擎返回第一步...</span>
-              <div style="margin-top: 16px">
-                <a-button size="small" @click="resetToIdle">取消等待</a-button>
-              </div>
             </div>
-            <div v-if="!(currentResult?.steps?.length) && !streamingText && !wsConnected" style="padding: 32px 0; text-align: center; color: #999">
-              <loading-outlined spin style="font-size: 24px; margin-bottom: 12px; display: block" />
-              <span>正在连接写作引擎...</span>
-              <div style="margin-top: 16px">
-                <a-button size="small" @click="resetToIdle">取消等待</a-button>
-              </div>
+            <div v-if="!(currentResult?.steps?.length) && !streamingText && !sseConnected" class="waiting-hint">
+              <loading-outlined spin style="font-size: 20px; margin-bottom: 8px; display: block" />
+              <span>正在连接服务器...</span>
             </div>
 
             <!-- 步骤折叠面板 -->
@@ -201,10 +330,10 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { createPaper, startWriting, stopWriting } from '@/api'
-import { usePaperStepWebSocket } from '@/composables/usePaperStepWebSocket'
+import { createPaper, startWriting, stopWriting, getFlowList } from '@/api'
+import { usePaperStepSSE } from '@/composables/usePaperStepSSE'
 import { message } from 'ant-design-vue'
 import MarkdownRender from '@/components/MarkdownRender.vue'
 import {
@@ -217,6 +346,28 @@ import {
   LoadingOutlined,
   StopOutlined
 } from '@ant-design/icons-vue'
+
+// ===== 论文模板 =====
+const SECTION_TEMPLATES = {
+  bachelor: ['摘要', '引言', '文献综述', '研究方法', '实验与分析', '结论与展望', '参考文献', '致谢'],
+  master: ['摘要', '引言', '国内外研究现状', '理论基础', '方法设计', '实验验证', '结果讨论', '结论', '参考文献', '致谢'],
+  journal: ['摘要', '引言', '相关工作', '方法', '实验', '结论', '参考文献'],
+  conference: ['摘要', '引言', '方法', '实验', '结论', '参考文献']
+}
+
+// ===== 分步进度定义 =====
+const PROGRESS_STEPS = [
+  { key: 'connect', label: '连接写作引擎', estimatedTime: '约 5s' },
+  { key: 'outline', label: '生成论文大纲', estimatedTime: '约 30s' },
+  { key: 'abstract', label: '生成摘要', estimatedTime: '约 20s' },
+  { key: 'intro', label: '生成引言', estimatedTime: '约 45s' },
+  { key: 'related', label: '生成相关工作', estimatedTime: '约 1min' },
+  { key: 'method', label: '生成方法章节', estimatedTime: '约 1min' },
+  { key: 'experiment', label: '生成实验章节', estimatedTime: '约 1min' },
+  { key: 'conclusion', label: '生成结论', estimatedTime: '约 30s' },
+  { key: 'review', label: '审稿与润色', estimatedTime: '约 2min' },
+  { key: 'done', label: '完成', estimatedTime: null }
+]
 
 const router = useRouter()
 
@@ -234,8 +385,8 @@ const currentPaperId = ref(null)
 const streamingText = ref('')
 const streamingStepName = ref('')
 
-// WebSocket 连接状态（由 hook 暴露）
-const { connected: wsConnected } = usePaperStepWebSocket(currentPaperId, {
+// SSE 连接状态（由 hook 暴露）
+const { connected: sseConnected } = usePaperStepSSE(currentPaperId, {
   onStep: (step) => {
     if (!currentResult.value) {
       currentResult.value = { steps: [] }
@@ -264,6 +415,7 @@ const { connected: wsConnected } = usePaperStepWebSocket(currentPaperId, {
     streamingText.value = data.fullText
   },
   onComplete: () => {
+    if (phase.value !== 'writing') return
     phase.value = 'done'
     message.success('论文写作完成！')
     // 3 秒后自动重置页面
@@ -276,36 +428,158 @@ const { connected: wsConnected } = usePaperStepWebSocket(currentPaperId, {
     phase.value = 'error'
     errorMsg.value = err
     message.error('写作出错: ' + err)
-    // 断开 WebSocket，清理状态
     currentPaperId.value = null
   }
 })
 
+// ===== 表单 =====
 const form = reactive({
   topic: '',
   description: '',
   keywords: '',
-  sectionPreset: 'default',
-  customSections: '',
+  sections: [...SECTION_TEMPLATES.journal],
   requirements: '',
   maxReviewRounds: 3
 })
 
+const selectedTemplate = ref('')
+const showStopConfirm = ref(false)
+const paramModified = ref(false)
+
+// ===== 流程选择 =====
+const availableFlows = ref([])
+const selectedFlowId = ref('standard')
+
+// 流程步骤预览（前端映射，与后端 FlowProfile 一致）
+const FLOW_STEP_MAP = {
+  standard: [
+    { icon: '🧭', name: '选题评估' },
+    { icon: '🔬', name: '文献调研' },
+    { icon: '📋', name: '大纲审阅' },
+    { icon: '✍️', name: '逐章写作' },
+    { icon: '📝', name: '审稿迭代' },
+    { icon: '✨', name: '润色定稿' },
+    { icon: '✅', name: '最终审核' }
+  ],
+  quick_draft: [
+    { icon: '🔬', name: '文献调研' },
+    { icon: '📋', name: '大纲审阅' },
+    { icon: '✍️', name: '逐章写作' },
+    { icon: '✨', name: '润色定稿' },
+    { icon: '✅', name: '最终审核' }
+  ],
+  deep_research: [
+    { icon: '🧭', name: '选题评估' },
+    { icon: '🔬', name: '深度文献调研' },
+    { icon: '📋', name: '大纲审阅' },
+    { icon: '✍️', name: '逐章写作' },
+    { icon: '📝', name: '审稿迭代 ×5' },
+    { icon: '✨', name: '润色定稿' },
+    { icon: '✅', name: '最终审核' }
+  ],
+  write_only: [
+    { icon: '✍️', name: '逐章写作' },
+    { icon: '✨', name: '润色定稿' },
+    { icon: '✅', name: '最终审核' }
+  ],
+  review_paper: [
+    { icon: '🔬', name: '深度文献调研' },
+    { icon: '📋', name: '大纲审阅' },
+    { icon: '✍️', name: '逐章写作' },
+    { icon: '✨', name: '润色定稿' },
+    { icon: '✅', name: '最终审核' }
+  ]
+}
+
+const selectedFlowDef = computed(() => FLOW_STEP_MAP[selectedFlowId.value] || FLOW_STEP_MAP.standard)
+
+function onFlowChange(flowId) {
+  // 深度研究流程强制 5 轮审稿
+  if (flowId === 'deep_research') {
+    form.maxReviewRounds = 5
+  }
+}
+
+const isCoreLocked = computed(() => phase.value === 'writing' || phase.value === 'creating')
+
+// ===== 模板 =====
+function applyTemplate(key) {
+  if (!key || !SECTION_TEMPLATES[key]) return
+  form.sections = [...SECTION_TEMPLATES[key]]
+}
+function addSection() { form.sections.push('新章节'); paramModified.value = true }
+function removeSection(index) {
+  if (form.sections.length <= 1) return
+  form.sections.splice(index, 1)
+  paramModified.value = true
+}
+
+// ===== 监听非核心参数修改 =====
+watch(
+  () => [form.keywords, form.requirements, form.maxReviewRounds],
+  () => { if (phase.value === 'writing') paramModified.value = true },
+  { deep: true }
+)
+
 // 缓存最近一次请求参数，用于重试
 const lastRequest = ref(null)
 
-function handleSectionChange(value) {
-  if (value === 'default') {
-    form.customSections = ''
-  }
+function getSections() {
+  return form.sections.filter(s => s.trim())
 }
 
-function getSections() {
-  if (form.sectionPreset === 'custom' && form.customSections) {
-    return form.customSections.split(/[,，]/).map(s => s.trim()).filter(Boolean)
+// ===== 分步进度计算 =====
+function mapStepToProgressIndex(step) {
+  const name = (step.agentName || '').toLowerCase()
+  if (step.status === 'FAILED') return name.includes('写作') ? 7 : 9
+  const map = {
+    '连接': 0, '大纲': 1, '摘要': 2, '引言': 3,
+    '相关工作': 4, '文献': 4, '方法': 5, '实验': 6,
+    '结论': 7, '审稿': 8, '润色': 8, '完成': 9
   }
-  return ['摘要', '引言', '相关工作', '方法', '实验', '结论']
+  for (const [k, v] of Object.entries(map)) {
+    if (name.includes(k)) return v
+  }
+  return -1
 }
+
+const progressStatusText = computed(() => {
+  const total = currentResult.value?.steps?.length || 0
+  if (total === 0) return '正在连接写作引擎，请稍候...'
+  const activeStep = PROGRESS_STEPS.find(s => s.status === 'active')
+  if (activeStep) return `正在${activeStep.label}，预计还需 ${activeStep.estimatedTime || '片刻'}`
+  const doneSteps = PROGRESS_STEPS.filter(s => s.status === 'done').length
+  return `已完成 ${doneSteps} / ${PROGRESS_STEPS.length} 步`
+})
+
+const progressSteps = computed(() => {
+  const steps = PROGRESS_STEPS.map(s => ({ ...s, status: 'pending' }))
+  const completed = currentResult.value?.steps || []
+  if (phase.value === 'creating') { steps[0].status = 'active'; return steps }
+  if (sseConnected.value) steps[0].status = 'done'
+
+  completed.forEach((s) => {
+    const idx = mapStepToProgressIndex(s)
+    if (idx >= 0 && idx < steps.length) {
+      steps[idx].status = s.status === 'COMPLETED' ? 'done' : s.status === 'FAILED' ? 'error' : 'done'
+    }
+  })
+
+  if (phase.value === 'writing' && streamingText.value) {
+    const stepName = (streamingStepName.value || '').toLowerCase()
+    for (const [k, v] of Object.entries({
+      '大纲': 1, '摘要': 2, '引言': 3, '相关工作': 4, '文献': 4,
+      '方法': 5, '实验': 6, '结论': 7, '审稿': 8, '润色': 8
+    })) {
+      if (stepName.includes(k)) { steps[v].status = 'active'; break }
+    }
+  }
+
+  if (phase.value === 'done') {
+    steps.forEach(s => { if (s.status === 'pending') s.status = 'done' })
+  }
+  return steps
+})
 
 function formatMs(ms) {
   if (!ms) return ''
@@ -327,6 +601,12 @@ function getRoleColor(role) {
 
 // ===== 挂载时恢复状态 =====
 onMounted(async () => {
+  // 加载可用流程列表（与断点恢复无关，始终执行）
+  try {
+    const res = await getFlowList()
+    availableFlows.value = res.data || []
+  } catch (_) { /* 降级：下拉框为空，后端使用默认流程 */ }
+
   const savedId = localStorage.getItem('paperai_paperId')
   const savedSteps = localStorage.getItem('paperai_steps')
   const savedDone = localStorage.getItem('paperai_done')
@@ -397,7 +677,8 @@ async function handleWrite() {
     keywords: form.keywords,
     sections: getSections(),
     requirements: form.requirements,
-    maxReviewRounds: form.maxReviewRounds
+    maxReviewRounds: form.maxReviewRounds,
+    flowId: selectedFlowId.value
   }
   lastRequest.value = reqData
 
@@ -434,14 +715,20 @@ async function handleWrite() {
 }
 
 async function handleStop() {
+  showStopConfirm.value = false
   if (!currentPaperId.value) return
   try {
     await stopWriting(currentPaperId.value)
-    phase.value = 'done'
-    message.info('写作已停止')
+    message.info('写作已停止，内容已保存')
   } catch (e) {
-    message.error('停止失败: ' + e.message)
+    message.error('停止请求失败: ' + e.message)
   }
+  // 清理 SSE 连接和本地状态
+  currentPaperId.value = null
+  phase.value = 'idle'
+  localStorage.removeItem('paperai_paperId')
+  localStorage.removeItem('paperai_steps')
+  localStorage.removeItem('paperai_done')
 }
 
 function handleRetry() {
@@ -476,6 +763,35 @@ function viewDetail() {
   height: calc(100vh - 140px);
   overflow: hidden;
 }
+
+/* ===== 流程预览 ===== */
+.flow-preview {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 6px;
+  border: 1px solid #f0f0f0;
+}
+.flow-preview-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+}
+.flow-step-tag {
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: rgba(24,144,255,0.08);
+  color: #1890ff;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.flow-step-arrow {
+  color: #bbb;
+  font-size: 10px;
+  margin: 0 2px;
+}
 .write-paper :deep(.ant-row) {
   height: 100%;
 }
@@ -485,6 +801,94 @@ function viewDetail() {
 }
 .result-card {
   margin-bottom: 16px;
+}
+
+/* ===== 分步进度指示器 ===== */
+.progress-section {
+  padding: 8px 0 4px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  margin-bottom: 12px;
+}
+.progress-status-text {
+  font-size: 13px;
+  color: #1890ff;
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+.step-timeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.step-node {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  background: rgba(255,255,255,0.04);
+  transition: all 0.3s;
+}
+.step-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #d9d9d9;
+}
+.step-indicator {
+  font-size: 12px;
+}
+.step-spin { font-size: 12px; color: #1890ff; }
+.step-active { background: #e6f7ff; border-color: #91d5ff; }
+.step-active .step-label { color: #1890ff; font-weight: 600; }
+.step-done { background: #f6ffed; }
+.step-done .step-label { color: #52c41a; }
+.step-error { background: #fff2f0; }
+.step-error .step-label { color: #ff4d4f; }
+.step-sub { font-size: 10px; color: #999; margin-top: 1px; }
+
+/* ===== 等待提示 ===== */
+.waiting-hint {
+  padding: 24px 0;
+  text-align: center;
+  color: rgba(255,255,255,0.4);
+}
+
+/* ===== 参数修改提示 ===== */
+.param-hint {
+  padding: 8px 12px;
+  margin-top: 8px;
+  background: rgba(255,197,61,0.08);
+  border: 1px solid rgba(255,197,61,0.2);
+  border-radius: 4px;
+  font-size: 12px;
+  color: #ffc53d;
+}
+
+/* ===== 章节列表 ===== */
+.section-list {
+  margin-top: 4px;
+}
+.section-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.section-drag-handle {
+  cursor: grab;
+  color: rgba(255,255,255,0.4);
+  font-size: 14px;
+  user-select: none;
+}
+
+/* ===== 滑块标签 ===== */
+.slider-label {
+  font-size: 10px;
+  color: rgba(255,255,255,0.4);
+  user-select: none;
 }
 
 /* ===== 折叠面板头部 ===== */
@@ -501,10 +905,10 @@ function viewDetail() {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: #e8e8e8;
+  background: rgba(255,255,255,0.1);
   font-size: 12px;
   font-weight: bold;
-  color: #666;
+  color: rgba(255,255,255,0.5);
 }
 .panel-label {
   flex: 1;
@@ -518,7 +922,7 @@ function viewDetail() {
   line-height: 1.4;
 }
 .panel-time {
-  color: #999;
+  color: rgba(255,255,255,0.4);
   font-size: 12px;
   margin-left: auto;
   white-space: nowrap;
@@ -526,27 +930,39 @@ function viewDetail() {
 
 /* ===== AI 输出区域 ===== */
 .ai-output {
-  padding: 4px 0;
+  padding: 6px 0;
 }
 .ai-output-header {
-  margin-bottom: 8px;
-  font-size: 13px;
-  color: #666;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: rgba(255,255,255,0.35);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
 }
+.ai-output-body {
+  color: #e0e0e8;
+}
+.ai-output-body :deep(h1) { font-size: 22px; color: #fff; margin: 20px 0 10px; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 6px; }
+.ai-output-body :deep(h2) { font-size: 18px; color: #f0f0f5; margin: 16px 0 8px; }
+.ai-output-body :deep(h3) { font-size: 15px; color: #e0e0e8; margin: 14px 0 6px; }
+.ai-output-body :deep(p) { margin: 8px 0; line-height: 1.75; color: #d8d8e0; }
+.ai-output-body :deep(code) { background: rgba(146,84,222,0.1); color: #d4b8ff; padding: 2px 6px; border-radius: 3px; font-size: 0.88em; }
+.ai-output-body :deep(pre) { background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; padding: 14px; margin: 12px 0; }
+.ai-output-body :deep(pre code) { background: none; padding: 0; color: #c8d0e0; font-size: 12px; line-height: 1.6; }
+.ai-output-body :deep(blockquote) { border-left: 3px solid #9254de; padding: 8px 14px; margin: 12px 0; background: rgba(146,84,222,0.04); color: #b8b8c8; border-radius: 0 4px 4px 0; }
+.ai-output-body :deep(table) { border-collapse: collapse; margin: 10px 0; font-size: 12px; }
+.ai-output-body :deep(th), .ai-output-body :deep(td) { border: 1px solid rgba(255,255,255,0.06); padding: 6px 12px; }
+.ai-output-body :deep(th) { background: rgba(255,255,255,0.03); color: #c0c0d0; }
 .ai-output-text {
-  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  color: #333;
-  word-break: break-word !important;
-  white-space: pre-wrap !important;
-  overflow-wrap: break-word !important;
+  font-family: 'Consolas','Monaco','Courier New',monospace;
+  font-size: 13px; line-height: 1.6; color: #d8d8e0;
+  word-break: break-word !important; white-space: pre-wrap !important; overflow-wrap: break-word !important;
 }
 .ai-output-scroll {
-  max-height: 35vh;
-  overflow-y: auto;
-  padding-right: 6px;
+  max-height: 35vh; overflow-y: auto; padding-right: 6px;
 }
+.ai-output-scroll::-webkit-scrollbar { width: 4px; }
+.ai-output-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
 
 /* ===== 折叠面板全局 ===== */
 :deep(.ant-collapse-header) {

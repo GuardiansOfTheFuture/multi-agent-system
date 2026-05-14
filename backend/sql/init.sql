@@ -15,25 +15,29 @@ CREATE TABLE IF NOT EXISTS paper (
     abstract_text    TEXT                               COMMENT '摘要',
     keywords         VARCHAR(500)                       COMMENT '关键词',
     description      TEXT                               COMMENT '研究方向描述',
-    status           VARCHAR(20)  NOT NULL DEFAULT 'DRAFT' COMMENT '状态: DRAFT/REVIEWING/PUBLISHED',
+    status           VARCHAR(20)  NOT NULL DEFAULT 'DRAFT' COMMENT '状态: DRAFT/REVIEWING/COMPLETED/FAILED',
     content          LONGTEXT                           COMMENT '最终内容',
+    user_id          BIGINT       NOT NULL DEFAULT 0    COMMENT '所属用户ID',
     current_version  INT          NOT NULL DEFAULT 0    COMMENT '当前最新版本号',
     created_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    INDEX idx_user_id (user_id),
     INDEX idx_status (status),
     INDEX idx_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='论文';
 
 -- 论文版本表
 CREATE TABLE IF NOT EXISTS paper_version (
-    id           BIGINT       AUTO_INCREMENT PRIMARY KEY COMMENT '版本ID',
-    paper_id     BIGINT       NOT NULL              COMMENT '所属论文ID',
-    version_no   INT          NOT NULL              COMMENT '版本号',
-    stage        VARCHAR(20)  NOT NULL DEFAULT 'DRAFT' COMMENT '阶段: DRAFT/REVIEWED/POLISHED/FINAL',
-    summary      VARCHAR(500)                       COMMENT '版本摘要',
-    content      MEDIUMTEXT                         COMMENT '论文全文(Markdown)',
-    word_count   INT          DEFAULT 0             COMMENT '字数统计',
-    created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    id              BIGINT       AUTO_INCREMENT PRIMARY KEY COMMENT '版本ID',
+    paper_id        BIGINT       NOT NULL              COMMENT '所属论文ID',
+    version_no      INT          NOT NULL              COMMENT '版本号',
+    stage           VARCHAR(20)  NOT NULL DEFAULT 'DRAFT' COMMENT '阶段: DRAFT/REVIEWED/POLISHED/FINAL/MANUAL_EDIT',
+    summary         VARCHAR(500)                       COMMENT '版本摘要/日志',
+    content         MEDIUMTEXT                         COMMENT '论文全文(Markdown)',
+    word_count      INT          DEFAULT 0             COMMENT '字数统计',
+    edit_type       VARCHAR(20)  DEFAULT 'MANUAL'      COMMENT '编辑类型: MANUAL/AGENT/BATCH',
+    change_summary  TEXT                               COMMENT '详细修改说明（记录修改了哪些地方）',
+    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     INDEX idx_paper_version (paper_id, version_no),
     INDEX idx_paper_stage (paper_id, stage)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='论文版本';
@@ -70,3 +74,13 @@ CREATE TABLE IF NOT EXISTS agent_message (
     INDEX idx_sender_role (sender_role),
     INDEX idx_message_type (message_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent消息';
+
+-- =============================================
+-- 增量变更 (已部署环境的升级语句)
+-- =============================================
+
+-- 2026-05-13: task 表增加版本号字段
+ALTER TABLE task ADD COLUMN version_no INT NOT NULL DEFAULT 0 COMMENT '关联版本号';
+
+-- 2026-05-13: paper 表删除 content 列（content 改由 paper_version 表管理）
+ALTER TABLE paper DROP COLUMN content;

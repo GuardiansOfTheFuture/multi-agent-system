@@ -26,15 +26,16 @@ public class AgentTaskServiceImpl implements AgentTaskService {
     private TaskMapper taskMapper;
 
     @Override
-    public Task createTask(Long paperId, String agentRole, Integer sortOrder, String description) {
+    public Task createTask(Long paperId, String agentRole, Integer sortOrder, String description, Integer versionNo) {
         Task task = new Task();
         task.setPaperId(paperId);
         task.setAgentRole(agentRole);
+        task.setVersionNo(versionNo);
         task.setSortOrder(sortOrder);
         task.setDescription(description);
         task.setStatus(TaskStatus.PENDING.getCode());
         taskMapper.insert(task);
-        log.info("创建任务: id={}, role={}, paperId={}", task.getId(), agentRole, paperId);
+        log.info("创建任务: id={}, role={}, paperId={}, versionNo={}", task.getId(), agentRole, paperId, versionNo);
         return task;
     }
 

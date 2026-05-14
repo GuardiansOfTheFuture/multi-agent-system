@@ -26,15 +26,24 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
+        String token = null;
+
+        // 1. Header: Authorization Bearer xxx（标准方式）
         String authHeader = request.getHeader("Authorization");
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            String token = authHeader.substring(7);
-            if (jwtUtil.validateToken(token)) {
-                Long userId = jwtUtil.getUserIdFromToken(token);
-                UsernamePasswordAuthenticationToken auth =
-                        new UsernamePasswordAuthenticationToken(userId, null, Collections.emptyList());
-                SecurityContextHolder.getContext().setAuthentication(auth);
-            }
+            token = authHeader.substring(7);
+        }
+
+        // 2. Query Param: ?token=xxx（SSE EventSource 不支持自定义 Header，通过查询参数传 token）
+        if (token == null) {
+            token = request.getParameter("token");
+        }
+
+        if (token != null && jwtUtil.validateToken(token)) {
+            Long userId = jwtUtil.getUserIdFromToken(token);
+            UsernamePasswordAuthenticationToken auth =
+                    new UsernamePasswordAuthenticationToken(userId, null, Collections.emptyList());
+            SecurityContextHolder.getContext().setAuthentication(auth);
         }
         chain.doFilter(request, response);
     }
