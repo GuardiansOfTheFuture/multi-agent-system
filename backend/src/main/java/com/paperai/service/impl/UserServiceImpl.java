@@ -12,6 +12,7 @@ import com.paperai.service.UserService;
 import com.paperai.utils.JwtUtil;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -25,7 +26,7 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public LoginVO register(RegisterRequest req) {
-        if (userMapper.selectList(null).stream().anyMatch(u -> u.getUsername().equals(req.getUsername()))) {
+        if (userMapper.findByUsername(req.getUsername()) != null) {
             throw new BusinessException(ResultCode.CONFLICT, "用户名已存在");
         }
         User user = new User();
@@ -39,10 +40,8 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public LoginVO login(LoginRequest req) {
-        User user = userMapper.selectList(null).stream()
-                .filter(u -> u.getUsername().equals(req.getUsername()))
-                .findFirst()
-                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "用户不存在"));
+        User user = userMapper.findByUsername(req.getUsername());
+        if (user == null) throw new BusinessException(ResultCode.NOT_FOUND, "用户不存在");
         if (!passwordEncoder.matches(req.getPassword(), user.getPassword())) {
             throw new BusinessException(ResultCode.FORBIDDEN, "密码错误");
         }
@@ -51,6 +50,7 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
+    @Cacheable(value = "users", key = "#id")
     public UserVO getUserById(Long id) {
         User user = userMapper.selectById(id);
         if (user == null) throw new BusinessException(ResultCode.NOT_FOUND, "用户不存在");

@@ -4,6 +4,7 @@ import com.paperai.agent.base.BaseAgent;
 import com.paperai.model.enums.AgentMessageType;
 import com.paperai.model.enums.AgentRole;
 import com.paperai.model.enums.TaskStatus;
+import com.paperai.service.LlmCacheService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
@@ -24,8 +25,8 @@ import org.springframework.stereotype.Component;
 @Slf4j
 public class WriterAgent extends BaseAgent {
 
-    public WriterAgent(ChatClient dashScopeChatClient) {
-        super(AgentRole.WRITER, dashScopeChatClient);
+    public WriterAgent(ChatClient dashScopeChatClient, LlmCacheService llmCacheService) {
+        super(AgentRole.WRITER, dashScopeChatClient, llmCacheService);
     }
 
     @Override

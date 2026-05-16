@@ -2,6 +2,7 @@ package com.paperai.controller;
 
 import com.paperai.model.enums.AgentRole;
 import com.paperai.model.vo.ApiResultVO;
+import com.paperai.service.LlmCacheService;
 import jakarta.annotation.Resource;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.web.bind.annotation.*;
@@ -16,6 +17,7 @@ import java.util.stream.Stream;
 public class AgentController {
 
     @Resource private ChatClient dashScopeChatClient;
+    @Resource private LlmCacheService llmCacheService;
 
     @GetMapping("/list")
     public ApiResultVO<List<Map<String, String>>> list() {
@@ -31,7 +33,10 @@ public class AgentController {
             @RequestParam(defaultValue = "测试") String topic,
             @RequestParam(defaultValue = "你好") String message) {
         String prompt = "主题：" + topic + "\n用户提问：" + message;
-        String response = dashScopeChatClient.prompt().user(prompt).call().content();
+        String cacheKey = llmCacheService.computeKey(null, prompt);
+        String cached = llmCacheService.get(cacheKey);
+        String response = cached != null ? cached : dashScopeChatClient.prompt().user(prompt).call().content();
+        if (cached == null && response != null) llmCacheService.put(cacheKey, response);
         return ApiResultVO.success(response);
     }
 }

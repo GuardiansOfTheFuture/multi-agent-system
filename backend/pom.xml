@@ -61,10 +61,11 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- Redis -->
+        <!-- Redisson (Redis 高性能客户端) -->
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-redis</artifactId>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson-spring-boot-starter</artifactId>
+            <version>3.40.2</version>
         </dependency>
 
         <!-- Spring Security -->

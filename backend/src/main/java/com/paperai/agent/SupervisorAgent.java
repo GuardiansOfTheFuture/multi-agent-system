@@ -4,6 +4,7 @@ import com.paperai.agent.base.BaseAgent;
 import com.paperai.model.enums.AgentMessageType;
 import com.paperai.model.enums.AgentRole;
 import com.paperai.model.enums.TaskStatus;
+import com.paperai.service.LlmCacheService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
@@ -25,8 +26,8 @@ import org.springframework.stereotype.Component;
 @Slf4j
 public class SupervisorAgent extends BaseAgent {
 
-    public SupervisorAgent(ChatClient dashScopeChatClient) {
-        super(AgentRole.SUPERVISOR, dashScopeChatClient);
+    public SupervisorAgent(ChatClient dashScopeChatClient, LlmCacheService llmCacheService) {
+        super(AgentRole.SUPERVISOR, dashScopeChatClient, llmCacheService);
     }
 
     @Override

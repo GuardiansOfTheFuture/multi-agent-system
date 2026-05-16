@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(claude plugin *)",
+      "Bash(ls E:\\\\\\\\java-pro\\\\\\\\ai-pro\\\\\\\\backend\\\\\\\\src\\\\\\\\main\\\\\\\\java\\\\\\\\com\\\\\\\\paperai\\\\\\\\model\\\\\\\\enums\\\\\\\\)",
+      "WebSearch",
+      "WebFetch(domain:bundlephobia.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:vueflow.dev)"
+    ]
+  }
+}

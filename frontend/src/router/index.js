@@ -47,6 +47,12 @@ const routes = [
         name: 'FlowCanvas',
         component: () => import('@/views/FlowCanvas.vue'),
         meta: { title: '流程画布' }
+      },
+      {
+        path: 'knowledge-graph',
+        name: 'KnowledgeGraph',
+        component: () => import('@/views/KnowledgeGraph.vue'),
+        meta: { title: '知识图谱' }
       }
     ]
   }

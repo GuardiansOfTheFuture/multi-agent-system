@@ -11,6 +11,12 @@ spring:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: Asia/Shanghai
 
+  # ===== Spring Cache (Redisson 自动配置) =====
+  cache:
+    type: redis
+    redis:
+      time-to-live: 15m
+
 # ===== MyBatis-Plus =====
 mybatis-plus:
   mapper-locations: classpath*:mapper/**/*.xml

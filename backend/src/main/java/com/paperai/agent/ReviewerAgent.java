@@ -4,6 +4,7 @@ import com.paperai.agent.base.BaseAgent;
 import com.paperai.model.enums.AgentMessageType;
 import com.paperai.model.enums.AgentRole;
 import com.paperai.model.enums.TaskStatus;
+import com.paperai.service.LlmCacheService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
@@ -27,8 +28,8 @@ import java.util.List;
 @Slf4j
 public class ReviewerAgent extends BaseAgent {
 
-    public ReviewerAgent(ChatClient dashScopeChatClient) {
-        super(AgentRole.REVIEWER, dashScopeChatClient);
+    public ReviewerAgent(ChatClient dashScopeChatClient, LlmCacheService llmCacheService) {
+        super(AgentRole.REVIEWER, dashScopeChatClient, llmCacheService);
     }
 
     @Override

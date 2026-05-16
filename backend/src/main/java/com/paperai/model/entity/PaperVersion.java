@@ -13,7 +13,8 @@ import java.time.LocalDateTime;
  */
 @Data
 @TableName("paper_version")
-public class PaperVersion {
+public class PaperVersion implements java.io.Serializable {
+    private static final long serialVersionUID = 1L;
 
     /** 版本ID */
     @TableId(type = IdType.AUTO)

@@ -114,6 +114,15 @@ export function updateFlow(id, data) { return request.put(`/flow/${id}`, data) }
 export function deleteFlow(id) { return request.delete(`/flow/${id}`) }
 export function duplicateFlow(id) { return request.post(`/flow/${id}/duplicate`) }
 
+// ===== 知识图谱 =====
+export function listKg(params)          { return request.get('/kg', { params }) }
+export function getKg(id)              { return request.get(`/kg/${id}`) }
+export function createKg(data)         { return request.post('/kg', data) }
+export function updateKg(id, data)     { return request.put(`/kg/${id}`, data) }
+export function deleteKg(id)           { return request.delete(`/kg/${id}`) }
+export function duplicateKg(id)        { return request.post(`/kg/${id}/duplicate`) }
+export function extractKg(data)        { return request.post('/kg/extract', data) }
+
 // ===== 版本管理 =====
 export function getPaperVersions(paperId) { return request.get(`/paper/${paperId}/versions`) }
 export function getPaperVersion(paperId, versionNo) { return request.get(`/paper/${paperId}/versions/${versionNo}`) }

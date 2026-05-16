@@ -7,6 +7,7 @@ import com.paperai.model.enums.AgentMessageType;
 import com.paperai.model.enums.AgentRole;
 import com.paperai.model.enums.TaskStatus;
 import com.paperai.model.AgentMessage;
+import com.paperai.service.LlmCacheService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 
@@ -35,12 +36,16 @@ public abstract class BaseAgent {
     /** Spring AI ChatClient */
     protected final ChatClient chatClient;
 
+    /** LLM 响应缓存 */
+    protected final LlmCacheService llmCacheService;
+
     /** 共享上下文 */
     protected AgentContext context;
 
-    protected BaseAgent(AgentRole role, ChatClient chatClient) {
+    protected BaseAgent(AgentRole role, ChatClient chatClient, LlmCacheService llmCacheService) {
         this.role = role;
         this.chatClient = chatClient;
+        this.llmCacheService = llmCacheService;
     }
 
     /**
@@ -77,6 +82,10 @@ public abstract class BaseAgent {
      * 请求/响应详情由 LoggerAdvisor 统一记录，此处只记 Agent 层面的启动和完成
      */
     protected String callLlm(String userMessage) {
+        String cacheKey = llmCacheService.computeKey(getSystemPrompt(), userMessage);
+        String cached = llmCacheService.get(cacheKey);
+        if (cached != null) return cached;
+
         try {
             String response = chatClient.prompt()
                     .system(getSystemPrompt())
@@ -87,6 +96,7 @@ public abstract class BaseAgent {
             log.info("[{}] LLM 响应完成，长度: {}", role.getDisplayName(),
                     response != null ? response.length() : 0);
 
+            llmCacheService.put(cacheKey, response);
             return response;
         } catch (Exception e) {
             log.error("[{}] LLM 调用失败", role.getDisplayName(), e);
@@ -103,6 +113,13 @@ public abstract class BaseAgent {
      * @return 最终的完整响应
      */
     protected String callLlmStream(String userMessage, java.util.function.Consumer<String> onToken) {
+        String cacheKey = llmCacheService.computeKey(getSystemPrompt(), userMessage);
+        String cached = llmCacheService.get(cacheKey);
+        if (cached != null) {
+            onToken.accept(cached);
+            return cached;
+        }
+
         StringBuilder full = new StringBuilder();
 
         try {
@@ -119,6 +136,7 @@ public abstract class BaseAgent {
 
             String result = full.toString();
             log.info("[{}] LLM 流式响应完成，长度: {}", role.getDisplayName(), result.length());
+            llmCacheService.put(cacheKey, result);
             return result;
         } catch (Exception e) {
             log.error("[{}] LLM 流式调用失败", role.getDisplayName(), e);

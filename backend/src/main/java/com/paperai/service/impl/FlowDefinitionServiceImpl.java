@@ -8,6 +8,9 @@ import com.paperai.model.entity.FlowDefinition;
 import com.paperai.service.FlowDefinitionService;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,8 +23,13 @@ public class FlowDefinitionServiceImpl implements FlowDefinitionService {
     @Resource
     private FlowDefinitionMapper flowDefinitionMapper;
 
+    @jakarta.annotation.Resource
+    @org.springframework.context.annotation.Lazy
+    private FlowDefinitionServiceImpl self;
+
     @Override
     @Transactional
+    @CacheEvict(value = "flowDefinitions", key = "'user:' + #def.userId")
     public FlowDefinition create(FlowDefinition def) {
         flowDefinitionMapper.insert(def);
         log.info("创建流程定义: id={}, name={}, userId={}", def.getId(), def.getName(), def.getUserId());
@@ -29,6 +37,7 @@ public class FlowDefinitionServiceImpl implements FlowDefinitionService {
     }
 
     @Override
+    @Cacheable(value = "flowDefinitions", key = "#id")
     public FlowDefinition getById(Long id) {
         FlowDefinition def = flowDefinitionMapper.selectById(id);
         if (def == null) throw new BusinessException(ResultCode.NOT_FOUND, "流程定义不存在");
@@ -37,7 +46,7 @@ public class FlowDefinitionServiceImpl implements FlowDefinitionService {
 
     @Override
     public FlowDefinition getByIdAndUser(Long id, Long userId) {
-        FlowDefinition def = getById(id);
+        FlowDefinition def = self.getById(id);
         if (!def.getUserId().equals(userId)) {
             throw new BusinessException(ResultCode.FORBIDDEN, "无权访问该流程");
         }
@@ -45,6 +54,7 @@ public class FlowDefinitionServiceImpl implements FlowDefinitionService {
     }
 
     @Override
+    @Cacheable(value = "flowDefinitions", key = "'user:' + #userId")
     public List<FlowDefinition> listByUser(Long userId) {
         return flowDefinitionMapper.selectList(
             new LambdaQueryWrapper<FlowDefinition>()
@@ -55,6 +65,10 @@ public class FlowDefinitionServiceImpl implements FlowDefinitionService {
 
     @Override
     @Transactional
+    @Caching(evict = {
+        @CacheEvict(value = "flowDefinitions", key = "#id"),
+        @CacheEvict(value = "flowDefinitions", key = "'user:' + #userId")
+    })
     public FlowDefinition update(Long id, FlowDefinition def, Long userId) {
         FlowDefinition existing = getByIdAndUser(id, userId);
         existing.setName(def.getName() != null ? def.getName() : existing.getName());
@@ -69,6 +83,10 @@ public class FlowDefinitionServiceImpl implements FlowDefinitionService {
 
     @Override
     @Transactional
+    @Caching(evict = {
+        @CacheEvict(value = "flowDefinitions", key = "#id"),
+        @CacheEvict(value = "flowDefinitions", key = "'user:' + #userId")
+    })
     public void delete(Long id, Long userId) {
         getByIdAndUser(id, userId);
         flowDefinitionMapper.deleteById(id);
@@ -77,8 +95,9 @@ public class FlowDefinitionServiceImpl implements FlowDefinitionService {
 
     @Override
     @Transactional
+    @CacheEvict(value = "flowDefinitions", key = "'user:' + #userId")
     public FlowDefinition duplicate(Long id, Long userId) {
-        FlowDefinition src = getById(id);
+        FlowDefinition src = self.getById(id);
         FlowDefinition copy = new FlowDefinition();
         copy.setUserId(userId);
         copy.setName((src.getName() != null ? src.getName() : "") + " (副本)");

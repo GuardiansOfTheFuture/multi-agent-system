@@ -18,9 +18,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 /**
- * 动态流程执行引擎 — 解析 flow_definition.graph_data JSON，
- * 按 DAG 拓扑顺序执行节点，支持条件分支和循环回退。
- * SSE 推送包含 nodeId，前端画布可实时染色。
+ * 动态流程执行引擎
+ * 线程安全：每个 execute() 调用创建独立的 ExecState，不共享实例字段。
  */
 @Slf4j
 @Service
@@ -38,43 +37,40 @@ public class FlowEngine {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ConcurrentHashMap<Long, Boolean> runningTasks = new ConcurrentHashMap<>();
 
-    // ===== 图结构 =====
-    private List<Map<String, Object>> graphNodes;
-    private List<Map<String, Object>> graphEdges;
-    private Map<String, List<String>> forwardOut;  // nodeId -> [targetId]
-    private Map<String, List<String>> loopOut;     // nodeId -> [targetId] (回退边)
-    private Map<String, Map<String, Object>> nodeById;
-    private Map<String, Map<String, Object>> edgeBySrcType; // "src->target:conditionType" -> edge
+    // ===== 图结构（parseGraph 产出） =====
+    private record GraphData(
+            List<Map<String, Object>> nodes,
+            List<Map<String, Object>> edges,
+            Map<String, List<String>> forwardOut,   // nodeId -> [targetId]
+            Map<String, List<String>> loopOut,       // nodeId -> [targetId] (回退边)
+            Map<String, Map<String, Object>> nodeById,
+            Map<String, Map<String, Object>> edgeBySrcType // "src->target:conditionType" -> edge
+    ) {}
 
-    // ===== 执行状态 =====
-    private AgentContext ctx;
-    private Long paperId;
-    private int stepSeq;
-    private StringBuilder finalContent;
-    private Map<String, Integer> loopCounter;  // nodeId -> iterations done
-    private Set<String> completed;
-    private int maxSteps;
+    // ===== 执行状态（每 execute() 独立创建） =====
+    private static class ExecState {
+        final Long paperId;
+        final AgentContext ctx;
+        int stepSeq;
+        final StringBuilder finalContent = new StringBuilder();
+        final Map<String, Integer> loopCounter = new HashMap<>();
+        final Set<String> completed = new HashSet<>();
+        final int maxSteps = 50;
+        String lastAgentNodeId;
 
-    /**
-     * 停止任务
-     */
+        ExecState(Long paperId, String contextId, String topic) {
+            this.paperId = paperId;
+            this.ctx = new AgentContext(contextId, topic);
+        }
+    }
+
     public void stop(Long paperId) {
         runningTasks.put(paperId, true);
     }
 
-    /**
-     * 根据 FlowDefinition 执行
-     */
     public void execute(Long paperId, FlowDefinition def, PaperWritingRequestDTO req) {
-        this.paperId = paperId;
-        this.ctx = new AgentContext(UUID.randomUUID().toString(), req.getTopic());
-        this.stepSeq = 0;
-        this.finalContent = new StringBuilder();
-        this.loopCounter = new HashMap<>();
-        this.completed = new HashSet<>();
-        this.maxSteps = 50;
-
-        ctx.setAttribute("direction", req.getDescription() != null ? req.getDescription() : "");
+        ExecState s = new ExecState(paperId, UUID.randomUUID().toString(), req.getTopic());
+        s.ctx.setAttribute("direction", req.getDescription() != null ? req.getDescription() : "");
         runningTasks.put(paperId, false);
 
         String name = def.getName() != null ? def.getName() : "未知流程";
@@ -84,10 +80,10 @@ public class FlowEngine {
             if (gd == null || gd.isBlank()) {
                 throw new IllegalArgumentException("流程 graphData 为空");
             }
-            parseGraph(gd);
+            GraphData g = parseGraph(gd);
             paperService.getPaperById(paperId);
-            executeDAG();
-            finish();
+            executeDAG(s, g);
+            finish(s, g);
         } catch (Exception e) {
             if (runningTasks.getOrDefault(paperId, false)) {
                 log.info("任务被停止 paperId={}", paperId);
@@ -104,25 +100,25 @@ public class FlowEngine {
 
     // ===== 解析 graphData =====
     @SuppressWarnings("unchecked")
-    private void parseGraph(String graphData) throws Exception {
+    private GraphData parseGraph(String graphData) throws Exception {
         Map<String, Object> graph = objectMapper.readValue(graphData, Map.class);
-        graphNodes = (List<Map<String, Object>>) graph.get("nodes");
-        graphEdges = (List<Map<String, Object>>) graph.get("edges");
-        if (graphNodes == null) graphNodes = Collections.emptyList();
-        if (graphEdges == null) graphEdges = Collections.emptyList();
+        List<Map<String, Object>> nodes = (List<Map<String, Object>>) graph.get("nodes");
+        List<Map<String, Object>> edges = (List<Map<String, Object>>) graph.get("edges");
+        if (nodes == null) nodes = Collections.emptyList();
+        if (edges == null) edges = Collections.emptyList();
 
-        forwardOut = new HashMap<>();
-        loopOut = new HashMap<>();
-        nodeById = new HashMap<>();
-        edgeBySrcType = new HashMap<>();
+        Map<String, List<String>> forwardOut = new HashMap<>();
+        Map<String, List<String>> loopOut = new HashMap<>();
+        Map<String, Map<String, Object>> nodeById = new HashMap<>();
+        Map<String, Map<String, Object>> edgeBySrcType = new HashMap<>();
 
-        for (Map<String, Object> n : graphNodes) {
+        for (Map<String, Object> n : nodes) {
             String id = (String) n.get("id");
             nodeById.put(id, n);
             forwardOut.put(id, new ArrayList<>());
             loopOut.put(id, new ArrayList<>());
         }
-        for (Map<String, Object> e : graphEdges) {
+        for (Map<String, Object> e : edges) {
             String src = (String) e.get("source");
             String tgt = (String) e.get("target");
             Map<String, Object> data = (Map<String, Object>) e.get("data");
@@ -135,40 +131,38 @@ public class FlowEngine {
                 forwardOut.computeIfAbsent(src, k -> new ArrayList<>()).add(tgt);
             }
         }
+
+        return new GraphData(nodes, edges, forwardOut, loopOut, nodeById, edgeBySrcType);
     }
 
     // ===== 执行 DAG =====
-    private void executeDAG() {
-        // 入口节点：没有任何入边的节点
+    private void executeDAG(ExecState s, GraphData g) {
         Set<String> allIn = new HashSet<>();
-        for (Map<String, Object> e : graphEdges) {
+        for (Map<String, Object> e : g.edges) {
             allIn.add((String) e.get("target"));
         }
         List<String> entries = new ArrayList<>();
-        for (String id : forwardOut.keySet()) {
+        for (String id : g.forwardOut.keySet()) {
             if (!allIn.contains(id)) entries.add(id);
         }
         if (entries.isEmpty()) {
-            entries.addAll(forwardOut.keySet()); // fallback
+            entries.addAll(g.forwardOut.keySet());
         }
 
         String currentId = entries.get(0);
         int steps = 0;
-        while (currentId != null && steps < maxSteps) {
-            if (runningTasks.getOrDefault(paperId, false)) throw new RuntimeException("任务被停止");
-            String nextId = executeNode(currentId);
+        while (currentId != null && steps < s.maxSteps) {
+            if (runningTasks.getOrDefault(s.paperId, false)) throw new RuntimeException("任务被停止");
+            String nextId = executeNode(s, g, currentId);
             steps++;
             if (nextId == null) break;
             currentId = nextId;
         }
     }
 
-    /**
-     * 执行单个节点，返回下一个节点 ID
-     */
     @SuppressWarnings("unchecked")
-    private String executeNode(String nodeId) {
-        Map<String, Object> node = nodeById.get(nodeId);
+    private String executeNode(ExecState s, GraphData g, String nodeId) {
+        Map<String, Object> node = g.nodeById.get(nodeId);
         if (node == null) return null;
         String type = (String) node.get("type");
         if (type == null) type = "agent";
@@ -177,82 +171,68 @@ public class FlowEngine {
         if (data == null) data = Collections.emptyMap();
 
         String rawLabel = data.get("label") != null ? (String) data.get("label") : "未命名";
-        // 去掉 emoji 前缀（如 "✍️ 引言" → "引言"）
         String label = rawLabel.replaceAll("^[✍️🧭🔬📝✨📄⇢↺]\\s*", "").trim();
         if (label.isEmpty() || label.matches("^(写作者|导师|研究员|审稿人|润色师|论文任务)$")) {
-            label = "当前步骤";  // 通用 fallback，实际章节名应通过节点名称配置
+            label = "当前步骤";
         }
         String roleStr = (String) data.get("agentRole");
         AgentRole role = roleStr != null ? tryParseRole(roleStr) : AgentRole.WRITER;
 
-        // 论文节点：只传递信息，不调用 LLM
         if ("paper".equals(type)) {
             Map<String, Object> config = (Map<String, Object>) data.get("config");
             String paperTitle = config != null ? (String) config.get("paperTitle") : "";
-            ctx.setAttribute("paperTitle", paperTitle);
+            s.ctx.setAttribute("paperTitle", paperTitle);
             if (config != null && config.get("paperId") != null) {
-                ctx.setAttribute("paperId", config.get("paperId"));
+                s.ctx.setAttribute("paperId", config.get("paperId"));
             }
-            publishNodeStatus(nodeId, "completed", label, null);
-            completed.add(nodeId);
+            publishNodeStatus(s, nodeId, "completed", label, null);
+            s.completed.add(nodeId);
             log.info("  📄 论文节点 {}: {}", nodeId, paperTitle);
-            return getNextNode(nodeId, type, data);
+            return getNextNode(s, g, nodeId, type, data);
         }
 
-        // 发布 node 开始事件
-        publishNodeStatus(nodeId, "in_progress", label, role);
+        publishNodeStatus(s, nodeId, "in_progress", label, role);
 
         String result = null;
         try {
             if ("condition".equals(type)) {
-                // 条件节点：不调用 Agent，直接评估
-                String prevOutput = getPreviousOutput(nodeId);
+                String prevOutput = getPreviousOutput(s, g, nodeId);
                 result = "条件评估: " + ((String) data.getOrDefault("label", "判断"));
-                completed.add(nodeId);
+                s.completed.add(nodeId);
             } else if ("loop".equals(type)) {
-                // 循环节点：不调用 Agent，路由决策
                 result = "循环控制";
-                completed.add(nodeId);
+                s.completed.add(nodeId);
             } else {
-                // Agent 节点
                 BaseAgent agent = getAgent(role);
                 Map<String, Object> config = (Map<String, Object>) data.get("config");
-                data.put("__nodeId", nodeId);  // 供 buildTask 判断是否终端节点
-                String task = buildTask(label, data, config);
-                result = callAgent(agent, task, nodeId, label, role);
-                completed.add(nodeId);
+                data.put("__nodeId", nodeId);
+                String task = buildTask(s, g, label, data, config);
+                result = callAgent(s, agent, task, nodeId, label, role);
+                s.completed.add(nodeId);
             }
         } catch (Exception e) {
-            publishNodeStatus(nodeId, "failed", label + ": " + e.getMessage(), role);
+            publishNodeStatus(s, nodeId, "failed", label + ": " + e.getMessage(), role);
             throw new RuntimeException(e);
         }
 
-        // 发布 node 完成事件
-        publishNodeStatus(nodeId, "completed", label, role);
+        publishNodeStatus(s, nodeId, "completed", label, role);
 
-        // WriterAgent 内部已调用 ctx.addSection()，此处不再重复添加
         if (result != null && !"WRITER".equals(roleStr)) {
-            finalContent.append(result).append("\n\n");
+            s.finalContent.append(result).append("\n\n");
         }
 
-        // 决定下一个节点
-        return getNextNode(nodeId, type, data);
+        return getNextNode(s, g, nodeId, type, data);
     }
 
-    /**
-     * 获取下一个节点 — 处理条件分支和循环
-     * 条件节点基于上一节点输出的评分（6.5分阈值）判断 pass/fail
-     */
     @SuppressWarnings("unchecked")
-    private String getNextNode(String nodeId, String type, Map<String, Object> data) {
+    private String getNextNode(ExecState s, GraphData g, String nodeId, String type, Map<String, Object> data) {
         if ("condition".equals(type)) {
-            // 找到上一节点的输出作为评分依据
-            String lastOutput = getPreviousOutput(nodeId);
+            String lastOutput = getPreviousOutput(s, g, nodeId);
             double score = extractScore(lastOutput);
             boolean pass = score >= 6.5;
             log.info("条件判断: nodeId={}, score={}, pass={}", nodeId, score, pass);
 
-            for (Map<String, Object> e : graphEdges) {
+            for (Map<String, Object> e : g.edges) {
                 if (!nodeId.equals(e.get("source"))) continue;
                 Map<String, Object> ed = (Map<String, Object>) e.get("data");
                 String ct = ed != null ? (String) ed.get("conditionType") : "normal";
@@ -265,55 +245,48 @@ public class FlowEngine {
             Map<String, Object> config = (Map<String, Object>) data.get("config");
             int maxIter = config != null && config.get("maxIterations") instanceof Number
                 ? ((Number) config.get("maxIterations")).intValue() : 3;
-            int curIter = loopCounter.getOrDefault(nodeId, 0);
+            int curIter = s.loopCounter.getOrDefault(nodeId, 0);
 
-            if (curIter < maxIter && !loopOut.getOrDefault(nodeId, Collections.emptyList()).isEmpty()) {
-                loopCounter.put(nodeId, curIter + 1);
-                String backId = loopOut.get(nodeId).get(0);
-                // 重置回退路径上的节点状态
-                resetCompletedBetween(backId, nodeId);
+            if (curIter < maxIter && !g.loopOut.getOrDefault(nodeId, Collections.emptyList()).isEmpty()) {
+                s.loopCounter.put(nodeId, curIter + 1);
+                String backId = g.loopOut.get(nodeId).get(0);
+                resetCompletedBetween(s, nodeId);
                 return backId;
             }
         }
 
-        // 默认: 走第一条 forward 边
-        List<String> fwds = forwardOut.getOrDefault(nodeId, Collections.emptyList());
+        List<String> fwds = g.forwardOut.getOrDefault(nodeId, Collections.emptyList());
         if (!fwds.isEmpty()) {
             String next = fwds.get(0);
-            // 目标已完成 → 隐式回退，重置目标节点以便重新执行
-            if (completed.contains(next)) {
+            if (s.completed.contains(next)) {
                 log.info("隐式循环: {} → {}（目标已访问，重置后重新执行）", nodeId, next);
-                completed.remove(next);
-                // 也重置该节点之后所有已完成节点
-                resetForwardPath(next);
+                s.completed.remove(next);
+                resetForwardPath(s, g, next);
             }
             return next;
         }
 
-        // 无 forward 边: 检查 loop 边
-        List<String> loops = loopOut.getOrDefault(nodeId, Collections.emptyList());
+        List<String> loops = g.loopOut.getOrDefault(nodeId, Collections.emptyList());
         if (!loops.isEmpty()) return loops.get(0);
 
         return null;
     }
 
-    /** 重置从 nodeId 开始的所有已完成节点 */
-    private void resetForwardPath(String nodeId) {
+    private void resetForwardPath(ExecState s, GraphData g, String nodeId) {
         Set<String> toReset = new HashSet<>();
-        java.util.Queue<String> q = new java.util.LinkedList<>();
-        if (completed.contains(nodeId)) { toReset.add(nodeId); q.add(nodeId); }
+        Queue<String> q = new LinkedList<>();
+        if (s.completed.contains(nodeId)) { toReset.add(nodeId); q.add(nodeId); }
         while (!q.isEmpty()) {
             String id = q.poll();
-            List<String> fwds = forwardOut.getOrDefault(id, Collections.emptyList());
-            for (String fwd : fwds) {
-                if (completed.contains(fwd) && !toReset.contains(fwd)) {
+            for (String fwd : g.forwardOut.getOrDefault(id, Collections.emptyList())) {
+                if (s.completed.contains(fwd) && !toReset.contains(fwd)) {
                     toReset.add(fwd); q.add(fwd);
                 }
             }
         }
         toReset.forEach(id -> {
-            completed.remove(id);
-            Map<String, Object> n = nodeById.get(id);
+            s.completed.remove(id);
+            Map<String, Object> n = g.nodeById.get(id);
             if (n != null) {
                 Map<String, Object> d = (Map<String, Object>) n.get("data");
                 if (d != null) d.put("status", "pending");
@@ -322,48 +295,39 @@ public class FlowEngine {
         log.info("重置路径: {} 个节点", toReset.size());
     }
 
-    private void resetCompletedBetween(String fromId, String toId) {
-        // 简化：重置 fromId 到 toId 之间的节点
+    private void resetCompletedBetween(ExecState s, String toId) {
         Set<String> toReset = new HashSet<>();
-        for (String nid : completed) {
+        for (String nid : s.completed) {
             if (!nid.equals(toId)) toReset.add(nid);
         }
-        toReset.forEach(completed::remove);
+        toReset.forEach(s.completed::remove);
     }
 
-    /**
-     * 调用 Agent 执行任务 — 结果写入上下文供后续节点使用
-     */
-    private String callAgent(BaseAgent agent, String task, String nodeId, String label, AgentRole role) {
-        stepSeq++;
-        final int seq = stepSeq;
-        int ver = paperService.getPaperById(paperId).getCurrentVersion();
-        Task taskRecord = agentTaskService.createTask(paperId, role.getCode(), null, label, ver);
+    private String callAgent(ExecState s, BaseAgent agent, String task, String nodeId, String label, AgentRole role) {
+        s.stepSeq++;
+        int seq = s.stepSeq;
+        int ver = paperService.getPaperById(s.paperId).getCurrentVersion();
+        Task taskRecord = agentTaskService.createTask(s.paperId, role.getCode(), null, label, ver);
         agentTaskService.updateStatus(taskRecord.getId(), TaskStatus.IN_PROGRESS);
 
         log.info("→ FlowStep#{}: [{}] {} (node={})", seq, role.getDisplayName(), label, nodeId);
-        stepEventPublisher.publishStreamToken(paperId, seq, label, "");
+        stepEventPublisher.publishStreamToken(s.paperId, seq, label, "");
 
         try {
-            // 将上下文传给 Agent（执行过程中 Agent 可能通过 broadcast/sendMessage 写入 context）
-            agent.setContext(ctx);
-            String result = agent.executeTaskStream(task, ctx,
-                full -> stepEventPublisher.publishStreamToken(paperId, seq, label, full));
+            agent.setContext(s.ctx);
+            String result = agent.executeTaskStream(task, s.ctx,
+                full -> stepEventPublisher.publishStreamToken(s.paperId, seq, label, full));
             long elapsed = System.currentTimeMillis();
             agentTaskService.updateOutput(taskRecord.getId(), result, elapsed);
 
-            // 存储节点输出（供条件节点评分判断 + buildDraft 取最后输出）
-            ctx.putNodeOutput(nodeId, result);
-            lastAgentNodeId = nodeId;
+            s.ctx.putNodeOutput(nodeId, result);
+            s.lastAgentNodeId = nodeId;
 
-            // 导师选题评估 → 提取建议更新主题
             if (role == AgentRole.SUPERVISOR && label != null && label.contains("选题") && result != null) {
                 String suggested = extractTopicSuggestion(result);
-                log.info("选题提取: label={}, result前100字={}, suggested={}", label,
-                    result.length() > 100 ? result.substring(0, 100) : result, suggested);
-                if (suggested != null && !suggested.isBlank() && !suggested.equals(ctx.getTopic())) {
-                    String oldTopic = ctx.getTopic();
-                    ctx.setTopic(suggested);
+                if (suggested != null && !suggested.isBlank() && !suggested.equals(s.ctx.getTopic())) {
+                    String oldTopic = s.ctx.getTopic();
+                    s.ctx.setTopic(suggested);
                     log.info("选题已更新: '{}' → '{}'", oldTopic, suggested);
                 }
             }
@@ -378,73 +342,60 @@ public class FlowEngine {
         }
     }
 
-    /**
-     * 构建 Agent 任务 prompt — 兜底 + 质量要求
-     */
     @SuppressWarnings("unchecked")
-    private String buildTask(String label, Map<String, Object> data, Map<String, Object> config) {
+    private String buildTask(ExecState s, GraphData g, String label, Map<String, Object> data, Map<String, Object> config) {
         String notes = config != null ? (String) config.get("notes") : "";
         String role = (String) data.get("agentRole");
 
         StringBuilder sb = new StringBuilder();
 
-        // 主题（必有——论文节点提供）
-        String topic = ctx.getTopic();
+        String topic = s.ctx.getTopic();
         if (topic == null || topic.isBlank()) {
-            topic = (String) ctx.getAttribute("paperTitle");
+            topic = (String) s.ctx.getAttribute("paperTitle");
         }
         if (topic == null || topic.isBlank()) topic = "学术论文";
         sb.append("【论文主题】").append(topic).append("\n");
 
-        // 判断是否为终端节点（无正向出边 = 最后一步）
-        boolean isTerminal = forwardOut.get(data.get("__nodeId")) == null
-                          || forwardOut.get(data.get("__nodeId")).isEmpty();
+        boolean isTerminal = g.forwardOut.get(data.get("__nodeId")) == null
+                          || g.forwardOut.get(data.get("__nodeId")).isEmpty();
 
-        // 大纲：有则用，无则告知 AI 自行规划
-        String outline = ctx.getOutline();
+        String outline = s.ctx.getOutline();
         if (outline != null && !outline.isBlank()) {
             sb.append("【论文大纲】\n").append(outline).append("\n");
         } else if ("WRITER".equals(role)) {
             sb.append("【论文大纲】\n（暂无预设大纲，请根据主题自行规划合适的章节结构，至少包含：摘要、引言、方法、实验、结论）\n");
         }
 
-        // 研究材料
-        if (ctx.getResearchOutput() != null && !ctx.getResearchOutput().isBlank()) {
-            sb.append("【研究材料】\n").append(truncate(ctx.getResearchOutput(), 3000)).append("\n");
+        if (s.ctx.getResearchOutput() != null && !s.ctx.getResearchOutput().isBlank()) {
+            sb.append("【研究材料】\n").append(truncate(s.ctx.getResearchOutput(), 3000)).append("\n");
         } else if ("WRITER".equals(role)) {
             sb.append("【研究材料】\n（暂无研究材料，请基于你的知识库进行撰写，但请确保内容的学术准确性。如有不确定之处请标注）\n");
         }
 
-        // 已有章节
-        if (!ctx.getSections().isEmpty()) {
+        if (!s.ctx.getSections().isEmpty()) {
             if (isTerminal) {
-                // 终端节点：只需要最后一个 Writer 的输出（已包含所有修改）
-                String lastSection = getLastWriterOutput();
+                String lastSection = getLastWriterOutput(s, g);
                 if (lastSection != null) {
                     sb.append("【论文全文（已完成所有修改的最终版本）】\n");
                     sb.append(truncate(lastSection, 12000)).append("\n\n");
                 }
             } else {
-                // 中间节点：给摘要即可
                 sb.append("【已撰写章节】\n");
-                ctx.getSections().forEach((t, c) ->
+                s.ctx.getSections().forEach((t, c) ->
                     sb.append("- ").append(t).append("（").append(c != null ? c.length() : 0).append("字）\n"));
             }
         }
 
-        // 审稿意见 — 非终端 Writer 需要看到以进行修改
-        if (!ctx.getReviewComments().isEmpty() && !isTerminal) {
+        if (!s.ctx.getReviewComments().isEmpty() && !isTerminal) {
             sb.append("【审稿意见（请逐条修改）】\n");
-            ctx.getReviewComments().forEach(c -> sb.append("- ").append(c).append("\n"));
+            s.ctx.getReviewComments().forEach(c -> sb.append("- ").append(c).append("\n"));
             sb.append("\n请严格对照以上每一条审稿意见进行修改，不要遗漏。\n");
         }
 
-        // 用户备注
         if (notes != null && !notes.isBlank()) {
             sb.append("【用户备注】").append(notes).append("\n");
         }
 
-        // ── 按角色分派任务 + 质量要求 ──
         sb.append("\n━━━━━━ 当前任务 ━━━━━━\n");
 
         if ("RESEARCHER".equals(role)) {
@@ -537,7 +488,6 @@ public class FlowEngine {
             sb.append("请完成任务: ").append(label).append("\n");
         }
 
-        // 终端节点（无正向出边 = 流程最后一步）→ 输出完整最终论文
         if (isTerminal) {
             sb.append("""
 
@@ -584,22 +534,19 @@ public class FlowEngine {
         };
     }
 
-    /** 从 nodeOutputs 按前驱节点 ID 取输出（条件评分判断用） */
-    private String getPreviousOutput(String nodeId) {
-        for (Map<String, Object> e : graphEdges) {
+    private String getPreviousOutput(ExecState s, GraphData g, String nodeId) {
+        for (Map<String, Object> e : g.edges) {
             if (nodeId.equals(e.get("target"))) {
                 String src = (String) e.get("source");
-                String out = ctx.getNodeOutput(src);
+                String out = s.ctx.getNodeOutput(src);
                 return out != null ? out : "";
             }
         }
         return "";
     }
 
-    /** 从导师输出中提取选题建议（匹配多种格式） */
     private String extractTopicSuggestion(String text) {
         if (text == null) return null;
-        // 匹配多种格式: "建议题目: xxx" "推荐选题: xxx" "建议改为: xxx" "题目可改为: xxx"
         String[] patterns = {
             "建议(?:题目|选题|改为)[：:]\\s*(.+?)(?:[。\\n]|$)",
             "推荐(?:题目|选题)[：:]\\s*(.+?)(?:[。\\n]|$)",
@@ -616,10 +563,8 @@ public class FlowEngine {
         return null;
     }
 
-    /** 从文本中提取评分（匹配多种格式如 "评分: 7.2/10" "综合评分 6.5" "8/10"），无评分默认 5.0 */
     private double extractScore(String text) {
         if (text == null || text.isBlank()) return 5.0;
-        // 匹配 "评分: X.X" "综合评分: X.X/10" "X.X/10" "X分"
         String[] scorePatterns = {
             "评分[：:]\\s*(\\d+\\.?\\d*)",
             "综合评分[：:]\\s*(\\d+\\.?\\d*)",
@@ -632,7 +577,7 @@ public class FlowEngine {
             if (m.find()) {
                 try {
                     double score = Double.parseDouble(m.group(1));
-                    if (score > 10) score = score / 10.0; // 处理 75 → 7.5
+                    if (score > 10) score = score / 10.0;
                     return score;
                 } catch (NumberFormatException ignored) {}
             }
@@ -641,22 +586,21 @@ public class FlowEngine {
         return 5.0;
     }
 
-    private void publishNodeStatus(String nodeId, String status, String label, AgentRole role) {
+    private void publishNodeStatus(ExecState s, String nodeId, String status, String label, AgentRole role) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("nodeId", nodeId);
         payload.put("status", status);
         payload.put("label", label);
         payload.put("agentRole", role != null ? role.name() : null);
-        stepEventPublisher.publishNodeStatus(paperId, payload);
+        stepEventPublisher.publishNodeStatus(s.paperId, payload);
     }
 
-    private void finish() {
-        String draft = buildDraft();
-        ctx.setFinalDraft(draft);
-        paperService.saveVersion(paperId, "FINAL", "论文终稿", draft);
-        paperService.updateStatus(paperId, Constants.PAPER_STATUS_COMPLETED);
+    private void finish(ExecState s, GraphData g) {
+        String draft = buildDraft(s, g);
+        s.ctx.setFinalDraft(draft);
+        paperService.saveVersion(s.paperId, "FINAL", "论文终稿", draft);
+        paperService.updateStatus(s.paperId, Constants.PAPER_STATUS_COMPLETED);
 
-        // 隐式调用审稿：对最终论文进行一次质量评审
         try {
             String reviewTask = """
                 【论文主题】%s
@@ -669,55 +613,48 @@ public class FlowEngine {
                 ### 总体评价
                 ### 逐章评审意见
                 ### 改进建议
-                """.formatted(ctx.getTopic(), truncate(draft, 10000));
+                """.formatted(s.ctx.getTopic(), truncate(draft, 10000));
 
-            String review = reviewerAgent.executeTaskStream(reviewTask, ctx, null);
+            String review = reviewerAgent.executeTaskStream(reviewTask, s.ctx, null);
             if (review != null && !review.isBlank()) {
-                // 保存审稿意见为一个特殊版本
-                paperService.saveVersion(paperId, "REVIEW", "自动审稿意见", review);
-                log.info("自动审稿完成 paperId={}, reviewLength={}", paperId, review.length());
+                paperService.saveVersion(s.paperId, "REVIEW", "自动审稿意见", review);
+                log.info("自动审稿完成 paperId={}, reviewLength={}", s.paperId, review.length());
             }
         } catch (Exception e) {
-            log.warn("自动审稿失败 paperId={}: {}", paperId, e.getMessage());
+            log.warn("自动审稿失败 paperId={}: {}", s.paperId, e.getMessage());
         }
 
-        log.info("===== FlowEngine 完成 paperId={} =====", paperId);
-        stepEventPublisher.publishComplete(paperId);
+        log.info("===== FlowEngine 完成 paperId={} =====", s.paperId);
+        stepEventPublisher.publishComplete(s.paperId);
     }
 
-    /** 追踪最后一个执行的有效 Agent 节点 ID */
-    private String lastAgentNodeId = null;
-
-    /** 获取最后一个 Writer 节点的输出（终端节点素材） */
-    private String getLastWriterOutput() {
+    private String getLastWriterOutput(ExecState s, GraphData g) {
         String lastWriterId = null;
-        for (Map<String, Object> n : graphNodes) {
+        for (Map<String, Object> n : g.nodes) {
             Map<String, Object> d = (Map<String, Object>) n.get("data");
             if (d != null && "WRITER".equals(d.get("agentRole"))) {
                 String nid = (String) n.get("id");
-                if (ctx.getNodeOutput(nid) != null) lastWriterId = nid;
+                if (s.ctx.getNodeOutput(nid) != null) lastWriterId = nid;
             }
         }
-        return lastWriterId != null ? ctx.getNodeOutput(lastWriterId) : null;
+        return lastWriterId != null ? s.ctx.getNodeOutput(lastWriterId) : null;
     }
 
-    private String buildDraft() {
-        // 1. 优先取最后一个 Agent 的输出（Polisher/终审/Writer 产出的完整论文）
-        if (lastAgentNodeId != null) {
-            String output = ctx.getNodeOutput(lastAgentNodeId);
+    private String buildDraft(ExecState s, GraphData g) {
+        if (s.lastAgentNodeId != null) {
+            String output = s.ctx.getNodeOutput(s.lastAgentNodeId);
             if (output != null && output.length() > 200) {
-                log.info("buildDraft: 使用最后一个 Agent 输出 [nodeId={}, length={}]", lastAgentNodeId, output.length());
+                log.info("buildDraft: 使用最后一个 Agent 输出 [nodeId={}, length={}]", s.lastAgentNodeId, output.length());
                 return output;
             }
         }
 
-        // 2. 兜底：拼接所有章节
         StringBuilder sb = new StringBuilder();
-        sb.append("# ").append(ctx.getTopic()).append("\n\n");
-        if (!ctx.getSections().isEmpty()) {
-            ctx.getSections().forEach((t, c) -> sb.append("## ").append(t).append("\n").append(c).append("\n\n"));
-        } else if (finalContent.length() > 0) {
-            sb.append(finalContent);
+        sb.append("# ").append(s.ctx.getTopic()).append("\n\n");
+        if (!s.ctx.getSections().isEmpty()) {
+            s.ctx.getSections().forEach((t, c) -> sb.append("## ").append(t).append("\n").append(c).append("\n\n"));
+        } else if (s.finalContent.length() > 0) {
+            sb.append(s.finalContent);
         }
         return sb.toString();
     }

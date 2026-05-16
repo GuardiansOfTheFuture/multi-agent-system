@@ -13,7 +13,8 @@ import java.time.LocalDateTime;
  */
 @Data
 @TableName("flow_definition")
-public class FlowDefinition {
+public class FlowDefinition implements java.io.Serializable {
+    private static final long serialVersionUID = 1L;
 
     @TableId(type = IdType.AUTO)
     private Long id;

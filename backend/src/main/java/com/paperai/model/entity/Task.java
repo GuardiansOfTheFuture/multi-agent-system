@@ -13,7 +13,8 @@ import java.time.LocalDateTime;
  */
 @Data
 @TableName("task")
-public class Task {
+public class Task implements java.io.Serializable {
+    private static final long serialVersionUID = 1L;
 
     /** 任务ID */
     @TableId(type = IdType.AUTO)

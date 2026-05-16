@@ -31,6 +31,10 @@
           <template #icon><apartment-outlined /></template>
           <span>流程画布</span>
         </a-menu-item>
+        <a-menu-item key="/knowledge-graph">
+          <template #icon><share-alt-outlined /></template>
+          <span>知识图谱</span>
+        </a-menu-item>
         <a-menu-item key="/agents">
           <template #icon><robot-outlined /></template>
           <span>Agent 管理</span>
@@ -81,7 +85,7 @@ import { ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import {
-  EditOutlined, FileTextOutlined, RobotOutlined, ApartmentOutlined,
+  EditOutlined, FileTextOutlined, RobotOutlined, ApartmentOutlined, ShareAltOutlined,
   UserOutlined, LogoutOutlined, DownOutlined, MenuUnfoldOutlined, MenuFoldOutlined
 } from '@ant-design/icons-vue'
 

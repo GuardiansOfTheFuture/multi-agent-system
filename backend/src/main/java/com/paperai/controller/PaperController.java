@@ -11,6 +11,7 @@ import com.paperai.model.vo.ApiResultVO;
 import com.paperai.model.vo.PaperWritingVO;
 import com.paperai.model.vo.ResearchResultVO;
 import com.paperai.service.AgentTaskService;
+import com.paperai.service.LlmCacheService;
 import com.paperai.service.OrchestratorService;
 import com.paperai.service.PaperService;
 import jakarta.annotation.Resource;
@@ -43,6 +44,7 @@ public class PaperController {
     @Resource private AgentTaskService agentTaskService;
     @Resource private com.paperai.service.StepEventPublisher stepEventPublisher;
     @Resource private ChatClient dashScopeChatClient;
+    @Resource private LlmCacheService llmCacheService;
 
 
 
@@ -244,7 +246,10 @@ public class PaperController {
                 修改指令：
                 %s
                 """, selectedText, instruction);
-        String result = dashScopeChatClient.prompt().user(prompt).call().content();
+        String cacheKey = llmCacheService.computeKey(null, prompt);
+        String cached = llmCacheService.get(cacheKey);
+        String result = cached != null ? cached : dashScopeChatClient.prompt().user(prompt).call().content();
+        if (cached == null && result != null) llmCacheService.put(cacheKey, result);
         return ApiResultVO.success(Map.of(
                 "originalText", selectedText,
                 "modifiedText", result

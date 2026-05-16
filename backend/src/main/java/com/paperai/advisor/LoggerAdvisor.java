@@ -39,7 +39,10 @@ public class LoggerAdvisor implements CallAroundAdvisor, StreamAroundAdvisor {
         // 执行调用链
         AdvisedResponse response = chain.nextAroundCall(advisedRequest);
         long elapsed = System.currentTimeMillis() - start;
-        assert response.response() != null;
+        if (response.response() == null) {
+            log.warn("LLM 返回空响应，耗时 {}ms", elapsed);
+            return response;
+        }
         String result = response.response().getResult().getOutput().getText();
         log.info("├─ [LLM 响应] {} 字，耗时 {}ms", result.length(), elapsed);
         log.info("└─ 响应首行: {}", result.length() > 120 ? result.substring(0, 120) + "..." : result);

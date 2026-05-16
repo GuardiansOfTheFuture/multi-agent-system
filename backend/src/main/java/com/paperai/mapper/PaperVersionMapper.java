@@ -11,7 +11,7 @@ import java.util.List;
 @Mapper
 public interface PaperVersionMapper extends BaseMapper<PaperVersion> {
 
-    @Select("SELECT COALESCE(MAX(version_no), 0) + 1 FROM paper_version WHERE paper_id = #{paperId}")
+    @Select("SELECT COALESCE(MAX(version_no), 0) + 1 FROM paper_version WHERE paper_id = #{paperId} FOR UPDATE")
     Integer nextVersionNo(@Param("paperId") Long paperId);
 
     @Select("SELECT * FROM paper_version WHERE paper_id = #{paperId} ORDER BY version_no DESC")

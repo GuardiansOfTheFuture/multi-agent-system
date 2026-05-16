@@ -47,4 +47,14 @@ public class JwtUtil {
             return false;
         }
     }
+
+    public long getRemainingTtl(String token) {
+        try {
+            Date expiration = Jwts.parser().verifyWith(key).build()
+                    .parseSignedClaims(token).getPayload().getExpiration();
+            return Math.max(expiration.getTime() - System.currentTimeMillis(), 0);
+        } catch (JwtException e) {
+            return 0;
+        }
+    }
 }
