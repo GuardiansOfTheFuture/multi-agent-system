@@ -48,6 +48,12 @@ application-local.yml
 logs/
 *.log
 
+## RAG 向量数据（按用户隔离）
+backend/data/
+
+## 临时文件
+*.md.tmp
+
 ## 系统文件
 .DS_Store
 Thumbs.db
