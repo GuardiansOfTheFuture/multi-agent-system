@@ -1,8 +1,19 @@
 {
   "permissions": {
     "allow": [
-      "Bash(claude plugin *)",
-      "Bash(ls E:\\\\\\\\java-pro\\\\\\\\ai-pro\\\\\\\\backend\\\\\\\\src\\\\\\\\main\\\\\\\\java\\\\\\\\com\\\\\\\\paperai\\\\\\\\model\\\\\\\\enums\\\\\\\\)",
+      "Bash(git *)",
+      "Bash(mvn *)",
+      "Bash(ls *)",
+      "Bash(npm *)",
+      "Bash(find *)",
+      "Bash(wc *)",
+      "Bash(cat *)",
+      "Bash(curl *)",
+      "Bash(echo *)",
+      "Bash(rm *)",
+      "Bash(cd *)",
+      "Bash(mkdir *)",
+      "Bash(java *)",
       "WebSearch",
       "WebFetch(domain:bundlephobia.com)",
       "WebFetch(domain:www.npmjs.com)",

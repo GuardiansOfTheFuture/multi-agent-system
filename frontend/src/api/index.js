@@ -139,7 +139,7 @@ export function extractKgFromFile(file) {
 }
 
 // ===== 论文导出 =====
-export async function exportPaper(paperId, format, versionNo) {
+export async function exportPaper(paperId, format, versionNo, title) {
   let url = `/api/paper/${paperId}/export?format=${format}`
   if (versionNo) url += `&versionNo=${versionNo}`
   const token = localStorage.getItem('paperai_token')
@@ -150,9 +150,8 @@ export async function exportPaper(paperId, format, versionNo) {
     const err = await resp.text()
     throw new Error(err || '导出失败')
   }
-  const disposition = resp.headers.get('Content-Disposition') || ''
-  const match = disposition.match(/filename[^;=\n]*=["']?([^"';\n]*)["']?/)
-  let filename = match ? match[1] : `paper.${format}`
+  // 优先用传入的论文标题，兜底从 header 解析
+  let filename = title ? title.replace(/[\\/:*?\"<>|]/g, '_') + '.' + format : `paper.${format}`
   const blob = await resp.blob()
   const downloadUrl = URL.createObjectURL(blob)
   const a = document.createElement('a')

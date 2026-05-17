@@ -679,7 +679,7 @@ onUnmounted(() => {})
 async function handleExport({ key }) {
   try {
     message.loading({ content: '正在导出...', key: 'export', duration: 0 })
-    await exportPaper(Number(route.params.id), key, activeVersion.value || undefined)
+    await exportPaper(Number(route.params.id), key, activeVersion.value || undefined, paper.value?.title)
     message.success({ content: '导出成功', key: 'export' })
   } catch (e) {
     message.error({ content: '导出失败: ' + (e.message || '未知错误'), key: 'export' })

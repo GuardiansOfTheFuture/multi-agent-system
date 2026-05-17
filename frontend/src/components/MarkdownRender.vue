@@ -36,10 +36,12 @@ const md = new MarkdownIt({
   highlight(str, lang) {
     if (lang && hljs.getLanguage(lang)) {
       try {
-        return `<pre class="hljs"><code>${hljs.highlight(str, { language: lang }).value}</code></pre>`
+        return `<pre class="hljs"><code class="language-${lang}">${hljs.highlight(str, { language: lang }).value}</code></pre>`
       } catch (_) { /* fall through */ }
     }
-    return `<pre class="hljs"><code>${md.utils.escapeHtml(str)}</code></pre>`
+    const html = md.utils.escapeHtml(str)
+    if (lang) return `<pre class="hljs"><code class="language-${lang}">${html}</code></pre>`
+    return `<pre class="hljs"><code>${html}</code></pre>`
   }
 })
 
