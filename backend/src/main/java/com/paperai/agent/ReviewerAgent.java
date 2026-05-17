@@ -135,6 +135,26 @@ public class ReviewerAgent extends BaseAgent {
         }
 
         String task = "请对上述论文内容进行全面审阅，从创新性、方法学、逻辑一致性、表达质量等维度给出详细评审意见。";
+        // 注入知识图谱参考
+        String kgData = ctx.getKgGraphData();
+        if (kgData != null && !kgData.isBlank()) {
+            try {
+                com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+                com.fasterxml.jackson.databind.JsonNode root = om.readTree(kgData);
+                com.fasterxml.jackson.databind.JsonNode knodes = root.get("nodes");
+                if (knodes != null && knodes.size() > 0) {
+                    StringBuilder sb = new StringBuilder(task);
+                    sb.append("\n\n【知识图谱参考】以下为本文关联的知识图谱核心概念，请检查：");
+                    sb.append("\n1. 论文是否覆盖了以下所有核心概念？");
+                    sb.append("\n2. 论文中使用的术语是否与以下概念一致？如有不一致请指出。\n");
+                    for (com.fasterxml.jackson.databind.JsonNode n : knodes) {
+                        String label = n.has("data") ? n.get("data").get("label").asText() : (n.has("label") ? n.get("label").asText() : "");
+                        if (!label.isBlank()) sb.append("- ").append(label).append("\n");
+                    }
+                    task = sb.toString();
+                }
+            } catch(Exception ignored){}
+        }
         return executeTask(task, ctx);
     }
 

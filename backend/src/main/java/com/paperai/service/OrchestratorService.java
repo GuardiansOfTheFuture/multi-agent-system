@@ -36,16 +36,13 @@ public class OrchestratorService {
     @Resource private StepEventPublisher stepEventPublisher;
     @Resource private FlowDefinitionService flowDefinitionService;
     @Resource private FlowEngine flowEngine;
+    @Resource private KnowledgeGraphService knowledgeGraphService;
 
     private final java.util.concurrent.ConcurrentHashMap<Long, Boolean> runningTasks = new java.util.concurrent.ConcurrentHashMap<>();
 
     public void stopTask(Long paperId) {
         runningTasks.put(paperId, true);
         log.info("收到停止请求 paperId={}", paperId);
-    }
-
-    public boolean isRunning(Long paperId) {
-        return runningTasks.containsKey(paperId) && !runningTasks.get(paperId);
     }
 
     // ===== 公共 API =====
@@ -81,7 +78,8 @@ public class OrchestratorService {
 
         log.info("===== 异步写作开始 paperId={}, flow={} =====", paperId, flow.getId());
         try {
-            paperService.getPaperById(paperId);
+            com.paperai.model.entity.Paper paper = paperService.getPaperById(paperId);
+            loadKgIntoContext(ctx, paper.getKgId());
             runSteps(paperId, ctx, req, steps, flow, 0, null);
             finish(paperId, ctx, start, null, null);
         } catch (Exception e) {
@@ -106,6 +104,7 @@ public class OrchestratorService {
         Paper paper = paperService.createPaper(req, userId != null ? userId : 0L);
         Long paperId = paper.getId();
         AgentContext ctx = new AgentContext(UUID.randomUUID().toString(), req.getTopic());
+        loadKgIntoContext(ctx, req.getKgId());
         List<PaperWritingVO.StepRecordVO> steps = new ArrayList<>();
         FlowProfile flow = resolveFlow(req.getFlowId());
 
@@ -134,6 +133,7 @@ public class OrchestratorService {
                 String d = "研究主题：" + req.getTopic();
                 if (req.getKeywords() != null) d += "\n关键词：" + req.getKeywords();
                 if (req.getRequirements() != null) d += "\n要求：" + req.getRequirements();
+                d += buildKgContext(ctx);
                 return d;
             });
         }
@@ -151,7 +151,7 @@ public class OrchestratorService {
             if (sections == null || sections.isEmpty()) sections = parseSections(outline);
             for (String sec : sections)
                 step(paperId, sec, AgentRole.WRITER, steps, writerAgent, ctx, seq, callback,
-                    () -> "请撰写论文的【" + sec + "】章节。\n基于已有大纲和研究材料展开。");
+                    () -> "请撰写论文的【" + sec + "】章节。\n基于已有大纲和研究材料展开。" + buildKgContext(ctx));
         }
 
         if (flow.isReviewIteration()) {
@@ -281,6 +281,46 @@ public class OrchestratorService {
         for (int i = steps.size() - 1; i >= 0; i--)
             if (steps.get(i).getAgentRole() == AgentRole.REVIEWER) return steps.get(i).getSummary();
         return null;
+    }
+
+    private void loadKgIntoContext(AgentContext ctx, Long kgId) {
+        if (kgId == null) return;
+        try {
+            com.paperai.model.entity.KnowledgeGraph kg = knowledgeGraphService.getById(kgId);
+            if (kg != null && kg.getGraphData() != null) {
+                ctx.setKgGraphData(kg.getGraphData());
+                log.info("已加载知识图谱到写作上下文: kgId={}, name={}", kgId, kg.getName());
+            }
+        } catch (Exception e) {
+            log.warn("加载知识图谱失败 kgId={}: {}", kgId, e.getMessage());
+        }
+    }
+
+    private String buildKgContext(AgentContext ctx) {
+        String kgData = ctx.getKgGraphData();
+        if (kgData == null || kgData.isBlank()) return "";
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.JsonNode root = om.readTree(kgData);
+            com.fasterxml.jackson.databind.JsonNode nodes = root.get("nodes");
+            com.fasterxml.jackson.databind.JsonNode edges = root.get("edges");
+            if (nodes == null || nodes.size() == 0) return "";
+            StringBuilder sb = new StringBuilder("\n\n【参考知识图谱】");
+            sb.append("\n实体列表：");
+            for (com.fasterxml.jackson.databind.JsonNode n : nodes) {
+                String label = n.has("data") ? n.get("data").get("label").asText() : (n.has("label") ? n.get("label").asText() : "");
+                if (!label.isBlank()) sb.append("\n- ").append(label);
+            }
+            if (edges != null && edges.size() > 0) {
+                sb.append("\n已知关系：");
+                for (com.fasterxml.jackson.databind.JsonNode e : edges) {
+                    String relLabel = e.has("data") ? e.get("data").get("label").asText() : "";
+                    if (!relLabel.isBlank()) sb.append("\n- ").append(relLabel);
+                }
+            }
+            sb.append("\n请在撰写时保持与图谱中概念和关系的一致性。");
+            return sb.toString();
+        } catch (Exception ex) { return ""; }
     }
 
     private String buildFinalDraft(AgentContext ctx) {

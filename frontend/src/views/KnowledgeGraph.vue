@@ -11,7 +11,18 @@
         <a-tooltip title="居中"><a-button size="small" @click="fitView">⊡</a-button></a-tooltip>
         <a-tooltip title="聚焦"><a-button size="small" @click="focusSel">◎</a-button></a-tooltip>
         <a-tooltip title="全屏"><a-button size="small" @click="toggleFS">⛶</a-button></a-tooltip>
-        <a-tooltip title="导出"><a-button size="small" @click="exportPNG">📷</a-button></a-tooltip>
+        <a-tooltip title="导出PNG"><a-button size="small" @click="exportPNG">📷</a-button></a-tooltip>
+        <a-dropdown>
+          <a-button size="small">⇲</a-button>
+          <template #overlay>
+            <a-menu>
+              <a-menu-item @click="exportJSON">导出 JSON</a-menu-item>
+              <a-menu-item @click="exportCSV">导出 CSV</a-menu-item>
+              <a-menu-divider />
+              <a-menu-item @click="openImport">📥 导入 JSON</a-menu-item>
+            </a-menu>
+          </template>
+        </a-dropdown>
         <a-divider type="vertical" style="border-color:rgba(255,255,255,0.08);height:18px;margin:0 4px" />
         <a-tooltip title="AI"><a-button size="small" type="primary" @click="openExtract" :loading="extracting">🤖</a-button></a-tooltip>
         <a-tooltip title="保存"><a-button size="small" type="primary" :disabled="saving" @click="save">💾</a-button></a-tooltip>
@@ -96,7 +107,40 @@
         <div class="ex-label" style="margin-top:12px">置信度阈值: {{exConf.toFixed(1)}}</div>
         <a-slider v-model:value="exConf" :min="0.5" :max="1.0" :step="0.1" />
         <a-divider style="margin:12px 0;border-color:rgba(255,255,255,0.06)" />
-        <a-form layout="vertical"><a-form-item label="文本"><a-textarea v-model:value="extractText" :rows="8" placeholder="粘贴论文摘要…"/></a-form-item><a-form-item label="主题"><a-input v-model:value="extractTopic" placeholder="可选"/></a-form-item></a-form>
+        <a-tabs v-model:activeKey="exInputTab" size="small" type="card">
+          <a-tab-pane key="text" tab="📝 文本粘贴">
+            <a-textarea v-model:value="extractText" :rows="6" placeholder="粘贴论文摘要或全文…" style="margin-top:8px"/>
+          </a-tab-pane>
+          <a-tab-pane key="file" tab="📄 文件上传">
+            <div style="margin-top:8px;padding:20px;border:1px dashed rgba(255,255,255,0.15);border-radius:6px;text-align:center">
+              <template v-if="!exFileResult">
+                <a-upload
+                  :before-upload="handleFileUpload"
+                  :show-upload-list="false"
+                  accept=".pdf,.docx,.md,.txt"
+                >
+                  <a-button type="dashed">
+                    <upload-outlined /> 选择文件
+                  </a-button>
+                </a-upload>
+                <div style="font-size:11px;color:rgba(255,255,255,0.3);margin-top:8px">支持 PDF / Word(.docx) / Markdown(.md) / TXT</div>
+              </template>
+              <template v-else>
+                <div style="text-align:left">
+                  <div style="margin-bottom:8px;font-size:12px;color:var(--muted)">
+                    📄 {{exFileResult.filename}}<span v-if="exFileResult.pageCount"> · {{exFileResult.pageCount}}页</span> · {{exFileResult.charCount}}字
+                  </div>
+                  <a-textarea :value="exFileResult.preview" :rows="4" disabled />
+                  <a-space style="margin-top:8px">
+                    <a-button size="small" @click="exFileResult=null;extractText=''">重新上传</a-button>
+                    <a-tag v-if="exFileResult.text" color="green">√ 已加载 {{exFileResult.charCount}} 字</a-tag>
+                  </a-space>
+                </div>
+              </template>
+            </div>
+          </a-tab-pane>
+        </a-tabs>
+        <a-form-item label="主题" style="margin-top:8px"><a-input v-model:value="extractTopic" placeholder="可选，辅助AI聚焦"/></a-form-item>
         <div style="text-align:right"><a-button @click="extractOpen=false">取消</a-button><a-button type="primary" @click="doExtract" :loading="extracting" style="margin-left:8px">开始抽取</a-button></div>
       </template>
       <!-- 结果预览页 -->
@@ -105,22 +149,22 @@
           <a-col :span="12">
             <div class="ex-label">实体 ({{exEntities.length}}) <a-button size="small" type="link" @click="exSelectAllEntities" style="font-size:10px">全选</a-button></div>
             <div class="ex-list">
-              <div v-for="(e,i) in exEntities" :key="i" class="ex-item" :class="{sel:e._sel!==false}" @click="e._sel=e._sel===false?true:false">
-                <a-checkbox :checked="e._sel!==false" style="margin-right:4px" />
-                <span :style="{color:EM[e.type]?.color||'#fff'}">{{EM[e.type]?.icon||'?'}} {{e.name}}</span>
+              <div v-for="(e,i) in exEntities" :key="i" class="ex-item" :class="{sel:e._sel!==false}">
+                <a-checkbox :checked="e._sel!==false" @click.stop="e._sel=e._sel===false?true:false" style="margin-right:4px" />
+                <a-input v-model:value="e.name" size="small" style="width:70px" @click.stop placeholder="名称" />
+                <a-select v-model:value="e.type" size="small" style="width:70px" @click.stop :options="typeOpts" :popup-match-select-width="false" popup-class-name="kg-select-popup" />
                 <span class="ex-conf" :style="{color:e.confidence>=0.8?'#52c41a':e.confidence>=0.6?'#faad14':'#ff4d4f'}">{{(e.confidence*100).toFixed(0)}}%</span>
-                <a-input v-model:value="e.name" size="small" style="width:80px;margin-left:4px" @click.stop />
               </div>
             </div>
           </a-col>
           <a-col :span="12">
             <div class="ex-label">关系 ({{exRelations.length}})</div>
             <div class="ex-list">
-              <div v-for="(r,i) in exRelations" :key="i" class="ex-item" :class="{sel:r._sel!==false}" @click="r._sel=r._sel===false?true:false">
-                <a-checkbox :checked="r._sel!==false" style="margin-right:4px" />
-                <span style="font-size:11px;color:var(--muted)">{{exEntityName(r.source)}}</span>
-                <span :style="{color:RM[r.type]?.color||'#fff',margin:'0 4px'}">→{{RM[r.type]?.name||r.type}}→</span>
-                <span style="font-size:11px;color:var(--muted)">{{exEntityName(r.target)}}</span>
+              <div v-for="(r,i) in exRelations" :key="i" class="ex-item" :class="{sel:r._sel!==false}">
+                <a-checkbox :checked="r._sel!==false" @click.stop="r._sel=r._sel===false?true:false" style="margin-right:2px;flex-shrink:0" />
+                <span style="font-size:10px;color:var(--muted);flex-shrink:0">{{exEntityName(r.source)}}</span>
+                <a-select v-model:value="r.type" size="small" style="width:60px;flex-shrink:0" @click.stop :options="relOpts" :popup-match-select-width="false" popup-class-name="kg-select-popup" />
+                <span style="font-size:10px;color:var(--muted);flex-shrink:0">{{exEntityName(r.target)}}</span>
                 <span class="ex-conf" :style="{color:r.confidence>=0.8?'#52c41a':r.confidence>=0.6?'#faad14':'#ff4d4f'}">{{(r.confidence*100).toFixed(0)}}%</span>
               </div>
             </div>
@@ -134,19 +178,21 @@
           </a-radio-group>
           <span style="flex:1"/>
           <a-button size="small" @click="exPreview=false">返回编辑</a-button>
-          <a-button size="small" type="primary" @click="doExtract" :loading="extracting">重新抽取</a-button>
+          <a-button size="small" type="primary" @click="doExtract(true)" :loading="extracting">重新抽取</a-button>
           <a-button size="small" type="primary" @click="doImport">导入选中 ({{exSelectedCount}})</a-button>
         </div>
       </template>
     </a-modal>
+    <input type="file" ref="fileInput" accept=".json" style="display:none" @change="handleImportFile" />
   </div>
 </template>
 
 <script setup>
 import { ref,reactive,computed,onMounted,onUnmounted,nextTick } from 'vue'
 import * as d3 from 'd3'
-import { listKg as apiListKg,getKg as apiGetKg,createKg as apiCreateKg,updateKg as apiUpdateKg,deleteKg as apiDeleteKg,duplicateKg as apiDupKg,extractKg as apiExtractKg } from '@/api'
+import { listKg as apiListKg,getKg as apiGetKg,createKg as apiCreateKg,updateKg as apiUpdateKg,deleteKg as apiDeleteKg,duplicateKg as apiDupKg,extractKg as apiExtractKg,extractKgFromFile } from '@/api'
 import { message } from 'ant-design-vue'
+import { UploadOutlined } from '@ant-design/icons-vue'
 
 const E=[{type:'concept',icon:'💡',name:'概念',color:'#FBBF24'},{type:'paper',icon:'📄',name:'论文',color:'#3B82F6'},{type:'author',icon:'👤',name:'作者',color:'#8B5CF6'},{type:'method',icon:'⚙️',name:'方法',color:'#10B981'},{type:'dataset',icon:'📊',name:'数据集',color:'#EC4899'},{type:'topic',icon:'🎯',name:'主题',color:'#EF4444'},{type:'problem',icon:'❓',name:'问题',color:'#F97316'},{type:'finding',icon:'✨',name:'发现',color:'#EAB308'}]
 const R=[{type:'uses',name:'使用',color:'#60a5fa'},{type:'extends',name:'扩展',color:'#10b981'},{type:'part_of',name:'属于',color:'#a78bfa'},{type:'contradicts',name:'矛盾',color:'#ef4444'},{type:'related_to',name:'相关',color:'#6b7280'},{type:'proposes',name:'提出',color:'#f59e0b'},{type:'evaluates',name:'评估',color:'#06b6d4'},{type:'cites',name:'引用',color:'#f472b6'}]
@@ -198,13 +244,35 @@ const extracting=ref(false),extractOpen=ref(false),extractText=ref(''),extractTo
 const exPreview=ref(false),exImportMode=ref('merge')
 const exEntityTypes=ref(E.map(e=>e.type)),exRelationTypes=ref(R.map(e=>e.type)),exConf=ref(0.7)
 const exEntities=ref([]),exRelations=ref([])
+const exInputTab=ref('text'),exFileResult=ref(null)
 const exSelectedCount=computed(()=>exEntities.value.filter(e=>e._sel!==false).length+exRelations.value.filter(r=>r._sel!==false).length)
 function exSelectAllEntities(){const all=exEntities.value.every(e=>e._sel!==false);exEntities.value.forEach(e=>e._sel=!all)}
 function exEntityName(id){const e=exEntities.value.find(x=>x._id===id);return e?e.name:id}
 function openExtract(){extractText.value='';extractTopic.value='';exPreview.value=false;exEntityTypes.value=E.map(e=>e.type);exRelationTypes.value=R.map(e=>e.type);exConf.value=0.7;exEntities.value=[];exRelations.value=[];extractOpen.value=true}
-function closeExtract(){extractOpen.value=false;exPreview.value=false}
+function closeExtract(){extractOpen.value=false;exPreview.value=false;exFileResult.value=null;exInputTab.value='text'}
+
+// 文件上传（PDF / Word / Markdown）
+async function handleFileUpload(file) {
+  const ext = file.name.split('.').pop().toLowerCase()
+  if (!['pdf','docx','md','txt','markdown'].includes(ext)) {
+    message.warn('不支持的文件格式，支持 PDF/Word/Markdown/TXT')
+    return false
+  }
+  extracting.value = true
+  try {
+    const res = await extractKgFromFile(file)
+    if (res.code === 200 && res.data) {
+      exFileResult.value = res.data
+      extractText.value = res.data.text || ''
+      message.success('成功提取 ' + res.data.charCount + ' 字')
+    } else { message.error(res.message || '提取失败') }
+  } catch (e) { message.error('上传失败: ' + (e.message || '未知错误')) }
+  finally { extracting.value = false }
+  return false
+}
+
 async function doExtract(reExtract){
-  if(!reExtract&&!extractText.value.trim()){message.warn('请输入文本');return}
+  if(!reExtract&&!extractText.value.trim()){message.warn('请输入文本或上传文件');return}
   extracting.value=true
   try{
     const body={text:extractText.value,topic:extractTopic.value,entityTypes:exEntityTypes.value,relationTypes:exRelationTypes.value,confidence:exConf.value}
@@ -272,7 +340,7 @@ function initD3Now(){
   const linkG=g.append('g')
   const lEnter=linkG.selectAll('line').data(simLinks).join('line')
   lEnter.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y)
-    .attr('stroke',d=>RM[d.data?.relationType]?.color||'#6b7280').attr('stroke-width',1.5).attr('opacity',0.7)
+    .attr('stroke',d=>RM[d.data?.relationType]?.color||'#6b7280').attr('stroke-width',d=>{const w={proposes:3,cites:2.5,extends:2,uses:2,contradicts:2,part_of:1.5,related_to:1,evaluates:2};return w[d.data?.relationType]||1.5}).attr('opacity',0.7)
     .attr('stroke-dasharray',d=>d.data?.relationType==='contradicts'?'6 3':null)
     .attr('marker-end',d=>'url(#ar-'+d.data?.relationType+')')
     .on('click',(ev,d)=>{ev.stopPropagation();selE(d.id)})
@@ -300,12 +368,13 @@ function initD3Now(){
       selN(d.id);applyStyles()
     })
     .on('contextmenu',(ev,d)=>{ev.preventDefault();svgCtx(ev,d.id,null)})
-    .call(d3.drag().on('start',function(ev,d){sim.alphaTarget(0.3).restart();d.fx=d.x;d.fy=d.y}).on('drag',function(ev,d){d.fx=ev.x;d.fy=ev.y}).on('end',function(ev,d){sim.alphaTarget(0);d.fx=null;d.fy=null}))
+    .call(d3.drag().on('start',function(ev,d){sim.alphaTarget(0.3).restart();d.fx=d.x;d.fy=d.y}).on('drag',function(ev,d){d.fx=ev.x;d.fy=ev.y}).on('end',function(ev,d){sim.alpha(0.06).alphaTarget(0);d.fx=null;d.fy=null}))
 
   nEnter.each(function(d){const g2=d3.select(this);const e=EM[d.type]||EM.concept;const deg=relCnt(d.id);const sz=Math.min(36,Math.max(20,22+deg*2))
     g2.append('circle').attr('class','ring').attr('r',sz+5).attr('fill','none').attr('stroke',e.color).attr('stroke-width',0).attr('opacity',0)
     g2.append('circle').attr('class','body').attr('r',sz).attr('fill','#1A1D27').attr('stroke',e.color).attr('stroke-width',2)
     g2.append('text').attr('class','icon').text(e.name.charAt(0)).attr('text-anchor','middle').attr('dy','0.1em').attr('fill',e.color).attr('font-size',14).attr('font-weight','bold').attr('pointer-events','none')
+    if(deg>1){g2.append('circle').attr('class','badge').attr('r',9).attr('cx',sz*0.7).attr('cy',-sz*0.7).attr('fill',e.color);g2.append('text').attr('class','btxt').text(deg).attr('x',sz*0.7).attr('y',-sz*0.7).attr('dy','0.35em').attr('text-anchor','middle').attr('fill','#fff').attr('font-size',8).attr('font-weight','bold').attr('pointer-events','none')}
     g2.append('text').attr('class','lbl').text(d.data?.label||'').attr('text-anchor','middle').attr('dy',sz+16).attr('fill','#E5E7EB').attr('font-size',10).attr('pointer-events','none')
   })
 
@@ -315,8 +384,7 @@ function initD3Now(){
     .force('charge',d3.forceManyBody().strength(-300))
     .force('center',d3.forceCenter(W/2,H/2).strength(0.08))
     .force('collide',d3.forceCollide(40))
-    .alphaDecay(0.015)
-    .velocityDecay(0.4)
+    .alphaDecay(0.008)
     .on('tick',()=>{
       linkG.selectAll('line').attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y)
       linkG.selectAll('text').attr('x',d=>(d.source.x+d.target.x)/2).attr('y',d=>(d.source.y+d.target.y)/2)
@@ -330,7 +398,7 @@ function initD3Now(){
 function applyStyles(){
   if(!g)return
   const sid=selNode.value?.id
-  g.selectAll('g.n circle.ring').attr('stroke-width',d=>sid===d.id?6:0).attr('opacity',d=>sid===d.id?1:0).attr('filter',d=>sid===d.id?'url(#glow)':null)
+  g.selectAll('g.n circle.ring').attr('stroke-width',d=>sid===d.id?8:0).attr('opacity',d=>sid===d.id?1:0).attr('filter',d=>sid===d.id?'url(#glow)':null)
   g.selectAll('g.n circle.body').attr('stroke-width',d=>sid===d.id?3:2)
   g.selectAll('g.n text.lbl').attr('fill',d=>sid===d.id?(EM[d.type]?.color||'#fff'):'#E5E7EB')
   // 连线：选中节点的关联边高亮，其他变淡
@@ -344,6 +412,13 @@ function focusSel(){if(!selNode.value||!svg||!zoom)return;const n=selNode.value;
 function toggleFS(){const el=mainRef.value;if(!el)return;document.fullscreenElement?document.exitFullscreen():el.requestFullscreen()}
 function exportPNG(){const svgEl=svgRef.value;const s=new XMLSerializer().serializeToString(svgEl);const img=new Image();img.onload=()=>{const c=document.createElement('canvas');c.width=svgEl.clientWidth*2;c.height=svgEl.clientHeight*2;c.getContext('2d').drawImage(img,0,0,c.width,c.height);const a=document.createElement('a');a.href=c.toDataURL('image/png');a.download='knowledge-graph.png';a.click()};img.src='data:image/svg+xml;base64,'+btoa(unescape(encodeURIComponent(s)))}
 function searchNode(text){if(!text){fitView();closePanel();return};const n=nodes.value.find(x=>x.data?.label?.includes(text));if(n){const W=mainRef.value.clientWidth,H=mainRef.value.clientHeight;svg.transition().duration(500).call(zoom.transform,d3.zoomIdentity.translate(W/2-n.x,H/2-n.y).scale(2));selN(n.id);applyStyles()}}
+// 导出
+const fileInput=ref(null)
+function exportJSON(){const gd=JSON.stringify({nodes:nodes.value.map(n=>({id:n.id,type:n.type,data:n.data})),edges:edges.value.map(e=>({id:e.id,source:typeof e.source==='object'?e.source.id:e.source,target:typeof e.target==='object'?e.target.id:e.target,data:e.data}))},null,2);downloadFile(gd,'knowledge-graph.json','application/json')}
+function exportCSV(){let csv='id,name,type,desc\n';nodes.value.forEach(n=>csv+=`${n.id},"${n.data?.label||''}",${n.type},"${n.data?.desc||''}"\n`);csv+='\nsource,target,type,desc\n';edges.value.forEach(e=>csv+=`${typeof e.source==='object'?e.source.id:e.source},${typeof e.target==='object'?e.target.id:e.target},${e.data?.relationType||''},"${e.data?.desc||''}"\n`);downloadFile(csv,'knowledge-graph.csv','text/csv')}
+function downloadFile(content,filename,type){const b=new Blob(['﻿'+content],{type});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=filename;a.click();URL.revokeObjectURL(a.href)}
+function openImport(){fileInput.value?.click()}
+async function handleImportFile(ev){const f=ev.target.files?.[0];if(!f)return;try{const text=await f.text();const d=JSON.parse(text);if(d.nodes&&d.edges){nodes.value=d.nodes;edges.value=d.edges;pushHistory();initD3();message.success(`已导入 ${d.nodes.length} 实体, ${d.edges.length} 关系`)}else{message.error('JSON 格式不正确，需要 {nodes:[],edges:[]}')}}catch(_){message.error('文件解析失败')}finally{ev.target.value=''}}
 
 onMounted(async()=>{await fetchList();if(kgList.value.length>0){currentId.value=kgList.value[0].id;await loadKg(kgList.value[0].id)}else initD3();window.addEventListener('resize',()=>{if(svg&&mainRef.value){const W=mainRef.value.clientWidth,H=mainRef.value.clientHeight;svg.attr('viewBox',`0 0 ${W} ${H}`).style('width',W+'px').style('height',H+'px');sim.force('center',d3.forceCenter(W/2,H/2).strength(0.08));sim.alpha(0.1).restart()}});document.addEventListener('keydown',onKey)})
 onUnmounted(()=>{if(sim)sim.stop()})

@@ -54,6 +54,21 @@ public class WriterAgent extends BaseAgent {
                 ## 章节标题
                 ### 小节标题
                 正文段落...
+
+                ## 图表支持
+                在适当位置可以使用以下代码块生成可视化内容：
+                - ````mermaid 代码块：绘制流程图、时序图、架构图、甘特图等
+                - ````chart-json 代码块：传入 ECharts JSON 配置绘制数据图表（折线图、柱状图、散点图等）
+                例：
+                ```mermaid
+                graph TD
+                  A[输入] --> B[处理]
+                  B --> C[输出]
+                ```
+                ```chart-json
+                {"title":{"text":"Research Data"},"xAxis":{"data":["A","B","C"]},"yAxis":{},"series":[{"type":"bar","data":[1,2,3]}]}
+                ```
+                在数据密集型章节（如实验/分析）中应主动使用图表辅助说明。
                 """;
     }
 

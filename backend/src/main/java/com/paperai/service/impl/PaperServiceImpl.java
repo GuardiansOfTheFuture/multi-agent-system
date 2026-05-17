@@ -53,6 +53,7 @@ public class PaperServiceImpl implements PaperService {
         paper.setStatus("DRAFT");
         paper.setCurrentVersion(0);
         paper.setUserId(userId);
+        paper.setKgId(request.getKgId());
         paperMapper.insert(paper);
         log.info("创建论文: id={}, title={}, userId={}", paper.getId(), paper.getTitle(), userId);
         return paper;

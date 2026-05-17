@@ -161,6 +161,13 @@
               </div>
             </a-form-item>
 
+            <a-form-item label="关联知识图谱">
+              <a-select v-model:value="form.kgId" placeholder="（可选）选择知识图谱辅助写作" allow-clear :disabled="phase !== 'idle'">
+                <a-select-option v-for="kg in kgList" :key="kg.id" :value="kg.id">{{ kg.name }}</a-select-option>
+              </a-select>
+              <div style="font-size:10px;color:rgba(255,255,255,0.2);margin-top:2px">绑定后 AI 写作时将自动引用图谱中的概念和关系</div>
+            </a-form-item>
+
             <a-form-item>
               <a-button
                 type="primary"
@@ -339,7 +346,7 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { createPaper, startWriting, stopWriting, getFlowList, getPaperList, getPaperDetail } from '@/api'
+import { createPaper, startWriting, stopWriting, getFlowList, getPaperList, getPaperDetail, listKg } from '@/api'
 import { usePaperStepSSE } from '@/composables/usePaperStepSSE'
 import { message } from 'ant-design-vue'
 import MarkdownRender from '@/components/MarkdownRender.vue'
@@ -462,8 +469,12 @@ const form = reactive({
   keywords: '',
   sections: [...SECTION_TEMPLATES.journal],
   requirements: '',
-  maxReviewRounds: 3
+  maxReviewRounds: 3,
+  kgId: null
 })
+
+const kgList = ref([])
+async function loadKgList(){ try{ const r = await listKg(); kgList.value = (r.data||[]).map(k=>({id:k.id,name:k.name})) }catch(_){} }
 
 const selectedTemplate = ref('')
 const showStopConfirm = ref(false)
@@ -571,6 +582,7 @@ onMounted(async () => {
 
   // 加载待执行论文列表
   await loadPendingPapers()
+  await loadKgList()
 
   // 支持从论文列表跳转过来（?paperId=xxx）
   const queryPaperId = route.query.paperId
@@ -650,7 +662,8 @@ async function handleWrite() {
     sections: getSections(),
     requirements: form.requirements,
     maxReviewRounds: form.maxReviewRounds,
-    flowId: selectedFlowId.value
+    flowId: selectedFlowId.value,
+    kgId: form.kgId
   }
   lastRequest.value = reqData
 

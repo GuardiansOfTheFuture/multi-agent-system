@@ -13,6 +13,8 @@ import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import org.springframework.ai.chat.client.ChatClient;
+
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
@@ -33,6 +35,9 @@ public class FlowEngine {
     @Resource private PaperService paperService;
     @Resource private AgentTaskService agentTaskService;
     @Resource private StepEventPublisher stepEventPublisher;
+    @Resource private KnowledgeGraphService knowledgeGraphService;
+    @Resource private KnowledgeService knowledgeService;
+    @Resource private com.paperai.config.AiConfig aiConfig;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ConcurrentHashMap<Long, Boolean> runningTasks = new ConcurrentHashMap<>();
@@ -57,6 +62,7 @@ public class FlowEngine {
         final Set<String> completed = new HashSet<>();
         final int maxSteps = 50;
         String lastAgentNodeId;
+        Long userId;
 
         ExecState(Long paperId, String contextId, String topic) {
             this.paperId = paperId;
@@ -71,6 +77,8 @@ public class FlowEngine {
     public void execute(Long paperId, FlowDefinition def, PaperWritingRequestDTO req) {
         ExecState s = new ExecState(paperId, UUID.randomUUID().toString(), req.getTopic());
         s.ctx.setAttribute("direction", req.getDescription() != null ? req.getDescription() : "");
+        // 加载关联的知识图谱和用户 ID
+        try { com.paperai.model.entity.Paper p = paperService.getPaperById(paperId); s.userId = p.getUserId(); if(p.getKgId()!=null){ com.paperai.model.entity.KnowledgeGraph kg = knowledgeGraphService.getById(p.getKgId()); if(kg!=null&&kg.getGraphData()!=null) s.ctx.setKgGraphData(kg.getGraphData()); } } catch(Exception ignored){}
         runningTasks.put(paperId, false);
 
         String name = def.getName() != null ? def.getName() : "未知流程";
@@ -164,6 +172,8 @@ public class FlowEngine {
     private String executeNode(ExecState s, GraphData g, String nodeId) {
         Map<String, Object> node = g.nodeById.get(nodeId);
         if (node == null) return null;
+        // 存储当前节点，供 callAgent 读取节点级配置（model/systemPrompt/temperature）
+        s.ctx.setAttribute("__currentNode", node);
         String type = (String) node.get("type");
         if (type == null) type = "agent";
 
@@ -176,7 +186,8 @@ public class FlowEngine {
             label = "当前步骤";
         }
         String roleStr = (String) data.get("agentRole");
-        AgentRole role = roleStr != null ? tryParseRole(roleStr) : AgentRole.WRITER;
+        boolean isCustom = roleStr != null && roleStr.startsWith("CUSTOM_");
+        AgentRole role = (roleStr != null && !isCustom) ? tryParseRole(roleStr) : AgentRole.WRITER;
 
         if ("paper".equals(type)) {
             Map<String, Object> config = (Map<String, Object>) data.get("config");
@@ -303,6 +314,7 @@ public class FlowEngine {
         toReset.forEach(s.completed::remove);
     }
 
+    @SuppressWarnings("unchecked")
     private String callAgent(ExecState s, BaseAgent agent, String task, String nodeId, String label, AgentRole role) {
         s.stepSeq++;
         int seq = s.stepSeq;
@@ -310,13 +322,48 @@ public class FlowEngine {
         Task taskRecord = agentTaskService.createTask(s.paperId, role.getCode(), null, label, ver);
         agentTaskService.updateStatus(taskRecord.getId(), TaskStatus.IN_PROGRESS);
 
+        // 读取节点级配置：model, systemPrompt, temperature
+        Map<String, Object> node = s.ctx.getAttribute("__currentNode");
+        ChatClient nodeClient = null;
+        String customPrompt = null;
+        if (node != null) {
+            Map<String, Object> data = (Map<String, Object>) node.get("data");
+            if (data != null) {
+                Map<String, Object> config = (Map<String, Object>) data.get("config");
+                if (config != null) {
+                    String model = (String) config.get("model");
+                    customPrompt = (String) config.get("systemPrompt");
+                    Object tempObj = config.get("temperature");
+                    if (model != null && !model.isBlank()) {
+                        double temp = 0.7;
+                        if (tempObj instanceof Number) temp = ((Number) tempObj).doubleValue();
+                        nodeClient = aiConfig.createChatClient(model, temp);
+                        log.info("  🔧 节点 {} 使用模型: {} (温度={})", nodeId, model, temp);
+                    } else if (tempObj instanceof Number) {
+                        double temp = ((Number) tempObj).doubleValue();
+                        nodeClient = aiConfig.createChatClient(com.paperai.config.AiConfig.getDefaultModel(), temp);
+                    }
+                    if (customPrompt != null && !customPrompt.isBlank()) {
+                        log.info("  🔧 节点 {} 使用自定义 SystemPrompt (长度={})", nodeId, customPrompt.length());
+                    }
+                }
+            }
+        }
+
         log.info("→ FlowStep#{}: [{}] {} (node={})", seq, role.getDisplayName(), label, nodeId);
         stepEventPublisher.publishStreamToken(s.paperId, seq, label, "");
 
         try {
             agent.setContext(s.ctx);
-            String result = agent.executeTaskStream(task, s.ctx,
-                full -> stepEventPublisher.publishStreamToken(s.paperId, seq, label, full));
+            String result;
+            if ((nodeClient != null || (customPrompt != null && !customPrompt.isBlank()))) {
+                result = agent.executeWithConfig(task, s.ctx,
+                    full -> stepEventPublisher.publishStreamToken(s.paperId, seq, label, full),
+                    nodeClient, customPrompt);
+            } else {
+                result = agent.executeTaskStream(task, s.ctx,
+                    full -> stepEventPublisher.publishStreamToken(s.paperId, seq, label, full));
+            }
             long elapsed = System.currentTimeMillis();
             agentTaskService.updateOutput(taskRecord.getId(), result, elapsed);
 
@@ -491,26 +538,64 @@ public class FlowEngine {
         if (isTerminal) {
             sb.append("""
 
-                ⚠ 你是本流程的最后一个节点。请基于以上所有素材，输出最终的完整论文。
+                ⚠ 你是本流程的最后一个节点。上面已经给出了完整的论文内容，你的任务是润色整合，不是重写。
 
-                输出规范：
-                # {论文标题}
-                ## 摘要（200-300字概括）
-                **关键词：** 关键词1, 关键词2, 关键词3
-                ## 引言
-                [引言内容]
-                ## 方法
-                [方法内容]
-                ## 实验
-                [实验内容]
-                ## 结论
-                [结论内容]
+                工作方式：
+                - 保留现有的 # 标题和 ## 章节结构，不要重新添加一层标题
+                - 逐段阅读，修正语法、逻辑、术语问题
+                - 统一全文学术风格和术语
+                - 确保章节之间逻辑连贯，过渡自然
+                - 如果发现明显的重复段落或章节，删除重复部分
 
-                要求：
-                - 直接输出 Markdown 格式论文正文，禁止输出解释性文字
-                - 各章节内容完整、逻辑连贯、学术规范
-                - 这是最终交付物，质量直接影响论文评价
+                禁止：
+                - 禁止输出"我将为您..."、"以下是润色后的论文..."之类的元描述
+                - 禁止在原有标题之上再套一层标题
+                - 禁止大量删减核心内容——这是润色，不是重写
+
+                直接输出润色后的完整论文正文。
                 """);
+        }
+
+        // RAG 检索
+        if (!isTerminal && ("RESEARCHER".equals(role) || "WRITER".equals(role))) {
+            try {
+                List<org.springframework.ai.document.Document> ragDocs = knowledgeService.search(topic + " " + label, 5, s.userId);
+                if (ragDocs != null && !ragDocs.isEmpty()) {
+                    sb.append("\n\n【参考资料（来自你的文献库）】\n");
+                    int refIdx = 1;
+                    for (var d : ragDocs) {
+                        sb.append("[参考").append(refIdx).append("] ")
+                          .append(d.getMetadata().getOrDefault("docTitle", "文献")).append(":\n");
+                        sb.append(d.getText()).append("\n\n");
+                        refIdx++;
+                    }
+                }
+            } catch (Exception e) { log.warn("RAG 检索失败: {}", e.getMessage()); }
+        }
+
+        // 注入知识图谱上下文
+        String kgData = s.ctx.getKgGraphData();
+        if (kgData != null && !kgData.isBlank()) {
+            try {
+                com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(kgData);
+                com.fasterxml.jackson.databind.JsonNode knodes = root.get("nodes");
+                com.fasterxml.jackson.databind.JsonNode kedges = root.get("edges");
+                if (knodes != null && knodes.size() > 0) {
+                    sb.append("\n\n【知识图谱参考】\n实体：");
+                    for (com.fasterxml.jackson.databind.JsonNode n : knodes) {
+                        String kgLabel = n.has("data") ? n.get("data").get("label").asText() : (n.has("label") ? n.get("label").asText() : "");
+                        if (!kgLabel.isBlank()) sb.append(kgLabel).append("、");
+                    }
+                    if (kedges != null && kedges.size() > 0) {
+                        sb.append("\n关系：");
+                        for (com.fasterxml.jackson.databind.JsonNode e : kedges) {
+                            String relLabel = e.has("data") ? e.get("data").get("label").asText() : "";
+                            if (!relLabel.isBlank()) sb.append(relLabel).append("、");
+                        }
+                    }
+                    sb.append("\n请在撰写时保持与图中概念和关系的一致性。\n");
+                }
+            } catch(Exception ignored){}
         }
 
         return sb.toString();

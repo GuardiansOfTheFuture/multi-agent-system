@@ -321,7 +321,7 @@ import ConditionNode from '@/components/flow/ConditionNode.vue'
 import LoopNode from '@/components/flow/LoopNode.vue'
 import PaperNode from '@/components/flow/PaperNode.vue'
 import ParticleBackground from '@/components/flow/ParticleBackground.vue'
-import { listFlows, getFlow, createFlow, updateFlow, deleteFlow, createPaper, startWriting, getPaperList, getPaperDetail } from '@/api'
+import { listFlows, getFlow, createFlow, updateFlow, deleteFlow, createPaper, startWriting, getPaperList, getPaperDetail, listCustomAgents } from '@/api'
 import { message } from 'ant-design-vue'
 
 const nodeTypes = { agent: AgentNode, condition: ConditionNode, loop: LoopNode, paper: PaperNode }
@@ -333,21 +333,27 @@ const isExecuting = ref(false)
 let execTimer = null
 
 // ===== 节点面板 =====
-const paletteItems = [
-  { type: 'PAPER', icon: '📄', label: '论文任务', color: '#9254de' },
-  { type: 'SUPERVISOR', icon: '🧭', label: '导师 Agent', color: '#9254de' },
-  { type: 'RESEARCHER', icon: '🔬', label: '研究员 Agent', color: '#1890ff' },
-  { type: 'WRITER', icon: '✍️', label: '写作者 Agent', color: '#52c41a' },
-  { type: 'REVIEWER', icon: '📝', label: '审稿人 Agent', color: '#fa8c16' },
-  { type: 'POLISHER', icon: '✨', label: '润色师 Agent', color: '#13c2c2' }
-]
+const paletteItems = reactive([
+  { type: 'PAPER', icon: '📄', label: '论文任务', color: '#9254de', custom: false },
+  { type: 'SUPERVISOR', icon: '🧭', label: '导师 Agent', color: '#9254de', custom: false },
+  { type: 'RESEARCHER', icon: '🔬', label: '研究员 Agent', color: '#1890ff', custom: false },
+  { type: 'WRITER', icon: '✍️', label: '写作者 Agent', color: '#52c41a', custom: false },
+  { type: 'REVIEWER', icon: '📝', label: '审稿人 Agent', color: '#fa8c16', custom: false },
+  { type: 'POLISHER', icon: '✨', label: '润色师 Agent', color: '#13c2c2', custom: false }
+])
+let paletteCustomStartIdx = 6  // 自定义 agent 从第7个开始
 const controlItems = [
   { type: 'CONDITION', icon: '⇢', label: '条件分支', color: '#faad14' },
   { type: 'LOOP', icon: '↺', label: '循环节点', color: '#597ef7' }
 ]
 
-const ROLE_NAMES = { SUPERVISOR: '导师', RESEARCHER: '研究员', WRITER: '写作者', REVIEWER: '审稿人', POLISHER: '润色师' }
-const roleOptions = Object.entries(ROLE_NAMES).map(([k, v]) => ({ value: k, label: v }))
+const ROLE_NAMES = reactive({ SUPERVISOR: '导师', RESEARCHER: '研究员', WRITER: '写作者', REVIEWER: '审稿人', POLISHER: '润色师' })
+const CUSTOM_ROLE_ENTRIES = ref([])  // [{code, name, icon, model, temperature, systemPrompt, color}]
+const roleOptions = computed(() => {
+  const base = Object.entries(ROLE_NAMES).map(([k, v]) => ({ value: k, label: v }))
+  const custom = CUSTOM_ROLE_ENTRIES.value.map(c => ({ value: c.code, label: c.icon + ' ' + c.name }))
+  return [...base, ...custom]
+})
 const modelOptions = ['qwen-max', 'qwen-plus', 'qwen-turbo', 'deepseek-v3', 'deepseek-r1'].map(m => ({ value: m, label: m }))
 
 // ===== 流程管理 =====
@@ -435,8 +441,8 @@ function applyEdit() {
   n.data = {
     ...n.data,
     agentRole: editingRole.value,
-    label: paletteItems.find(p => p.type === editingRole.value)?.icon + ' ' + (editingLabel.value || n.data?.label || ''),
-    roleName: ROLE_NAMES[editingRole.value],
+    label: (paletteItems.find(p => p.type === editingRole.value)?.icon || '🤖') + ' ' + (editingLabel.value || n.data?.label || ''),
+    roleName: ROLE_NAMES[editingRole.value] || CUSTOM_ROLE_ENTRIES.value.find(c => c.code === editingRole.value)?.name || editingRole.value,
     config: {
       systemPrompt: editingPrompt.value,
       model: editingModel.value,
@@ -478,12 +484,13 @@ function onDrop(event) {
     nodeType = 'agent'
     const icon = dragItem.icon
     const role = dragItem.type
+    const custom = CUSTOM_ROLE_ENTRIES.value.find(c => c.code === role)
     nodeData = {
       agentRole: role,
       label: `${icon} ${dragItem.label.replace(' Agent', '')}`,
-      roleName: ROLE_NAMES[role],
+      roleName: ROLE_NAMES[role] || custom?.name || role,
       stepIndex: nodes.value.length + 1,
-      config: { systemPrompt: '', model: 'qwen-max', temperature: 0.7, timeout: 120, retryCount: 2, notes: '' },
+      config: { systemPrompt: custom?.systemPrompt || '', model: custom?.model || 'qwen-max', temperature: custom?.temperature ?? 0.7, timeout: 120, retryCount: 2, notes: '' },
       status: 'pending'
     }
   }
@@ -1095,7 +1102,7 @@ function loadPresetGraph(flowId) {
     id: `node-${i}`,
     type: 'agent',
     position: { x: 280, y: i * 110 + 40 },
-    data: { agentRole: s.role, label: s.label, roleName: ROLE_NAMES[s.role], stepIndex: i + 1, config: { systemPrompt: '', model: 'qwen-max', temperature: 0.7, timeout: 120, retryCount: 2, notes: '' }, status: 'pending' }
+    data: { agentRole: s.role, label: s.label, roleName: ROLE_NAMES[s.role] || s.role, stepIndex: i + 1, config: { systemPrompt: '', model: 'qwen-max', temperature: 0.7, timeout: 120, retryCount: 2, notes: '' }, status: 'pending' }
   }))
   const es = []
   for (let i = 0; i < ns.length - 1; i++) {
@@ -1245,7 +1252,9 @@ function markDirty() {
 // ===== 工具 =====
 function roleColor(role) {
   const m = { SUPERVISOR: 'purple', RESEARCHER: 'blue', WRITER: 'green', REVIEWER: 'orange', POLISHER: 'cyan' }
-  return m[role] || 'default'
+  if (m[role]) return m[role]
+  const c = CUSTOM_ROLE_ENTRIES.value.find(x => x.code === role)
+  return c?.color || 'default'
 }
 
 // ===== 初始化 =====
@@ -1254,6 +1263,27 @@ onMounted(async () => {
     const res = await listFlows()
     availableFlows.value = res.data || []
   } catch (_) {}
+  // 加载自定义 Agent 到面板和角色列表
+  try {
+    const caRes = await listCustomAgents()
+    const customAgents = (caRes.data || []).filter(a => a.enabled !== 0)
+    CUSTOM_ROLE_ENTRIES.value = customAgents.map(a => ({
+      code: 'CUSTOM_' + a.id,
+      name: a.name,
+      icon: a.icon || '🤖',
+      model: a.model || 'qwen-max',
+      temperature: a.temperature != null ? a.temperature : 0.7,
+      systemPrompt: a.systemPrompt || '',
+      color: '#8b5cf6',
+      id: a.id
+    }))
+    // 添加到面板
+    paletteItems.splice(paletteCustomStartIdx)  // 移除旧的
+    CUSTOM_ROLE_ENTRIES.value.forEach(c => {
+      paletteItems.push({ type: c.code, icon: c.icon, label: c.name, color: c.color, custom: true })
+    })
+  } catch (_) {}
+
   // 加载论文任务（供论文节点选择）
   try {
     const paperRes = await getPaperList()

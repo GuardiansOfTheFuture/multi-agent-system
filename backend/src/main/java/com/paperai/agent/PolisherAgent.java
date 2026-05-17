@@ -129,42 +129,6 @@ public class PolisherAgent extends BaseAgent {
     }
 
     /**
-     * 润色指定文本
-     *
-     * @param text   待润色文本
-     * @param contextText 上下文说明
-     * @return 润色结果
-     */
-    public String polishText(String text, String contextText) {
-        String task = "请对以下文本进行润色：\n\n" + text;
-        if (contextText != null && !contextText.isBlank()) {
-            task = "上下文说明:\n" + contextText + "\n\n" + task;
-        }
-
-        long startTime = System.currentTimeMillis();
-        log.info("[{}] 开始润色文本", role.getDisplayName());
-
-        String response = callLlm(task);
-
-        long elapsed = System.currentTimeMillis() - startTime;
-        log.info("[{}] 润色完成，耗时 {}ms", role.getDisplayName(), elapsed);
-
-        return response;
-    }
-
-    /**
-     * 检查参考文献格式
-     *
-     * @param references 参考文献列表
-     * @return 检查结果
-     */
-    public String checkReferences(String references) {
-        String task = "请检查以下参考文献的格式是否规范，指出格式不一致或错误的地方，并给出修正建议：\n\n" + references;
-
-        return callLlm(task);
-    }
-
-    /**
      * 构建上下文信息
      */
     private String buildContextInfo() {

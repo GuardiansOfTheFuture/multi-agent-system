@@ -33,4 +33,7 @@ public class PaperWritingRequestDTO {
 
     /** 写作流程ID（为空时使用标准流程） */
     private String flowId;
+
+    /** 关联的知识图谱ID */
+    private Long kgId;
 }

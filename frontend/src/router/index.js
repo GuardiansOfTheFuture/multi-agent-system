@@ -49,10 +49,22 @@ const routes = [
         meta: { title: '流程画布' }
       },
       {
+        path: 'knowledge-base',
+        name: 'KnowledgeBase',
+        component: () => import('@/views/KnowledgeBase.vue'),
+        meta: { title: '知识库' }
+      },
+      {
         path: 'knowledge-graph',
         name: 'KnowledgeGraph',
         component: () => import('@/views/KnowledgeGraph.vue'),
         meta: { title: '知识图谱' }
+      },
+      {
+        path: 'script-playground',
+        name: 'ScriptPlayground',
+        component: () => import('@/views/ScriptPlayground.vue'),
+        meta: { title: '脚本解析器' }
       }
     ]
   }

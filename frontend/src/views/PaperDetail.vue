@@ -29,6 +29,20 @@
             <template #icon><clock-circle-outlined /></template>
             版本历史
           </a-button>
+          <a-dropdown>
+            <a-button>
+              <template #icon><download-outlined /></template>
+              导出
+            </a-button>
+            <template #overlay>
+              <a-menu @click="handleExport">
+                <a-menu-item key="docx">📄 Word (.docx)</a-menu-item>
+                <a-menu-item key="pdf">📕 PDF (.pdf)</a-menu-item>
+                <a-menu-item key="html">🌐 HTML (.html)</a-menu-item>
+                <a-menu-item key="latex">📜 LaTeX (.tex)</a-menu-item>
+              </a-menu>
+            </template>
+          </a-dropdown>
         </template>
 
         <template v-if="isEditing">
@@ -178,6 +192,7 @@
                 <a-empty v-else description="暂无审稿意见" :image-style="{ height: '40px' }" />
               </div>
             </a-tab-pane>
+
           </a-tabs>
         </a-card>
       </aside>
@@ -319,7 +334,8 @@ import {
   CheckCircleOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  CloseOutlined
+  CloseOutlined,
+  DownloadOutlined
 } from '@ant-design/icons-vue'
 import {
   getPaperTasks,
@@ -328,7 +344,8 @@ import {
   getLatestVersion,
   updatePaperContent,
   agentEditPaper,
-  savePaperVersion
+  savePaperVersion,
+  exportPaper
 } from '@/api'
 
 const route = useRoute()
@@ -652,10 +669,22 @@ onMounted(async () => {
     } catch (e) {
       console.error('获取版本列表失败:', e)
     }
+
   }
 })
 
 onUnmounted(() => {})
+
+// ===== 导出 =====
+async function handleExport({ key }) {
+  try {
+    message.loading({ content: '正在导出...', key: 'export', duration: 0 })
+    await exportPaper(Number(route.params.id), key, activeVersion.value || undefined)
+    message.success({ content: '导出成功', key: 'export' })
+  } catch (e) {
+    message.error({ content: '导出失败: ' + (e.message || '未知错误'), key: 'export' })
+  }
+}
 
 // ===== 状态工具 =====
 function statusColor(status) {

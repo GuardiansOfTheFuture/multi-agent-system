@@ -19,4 +19,6 @@ public interface FlowDefinitionService {
     void delete(Long id, Long userId);
 
     FlowDefinition duplicate(Long id, Long userId);
+
+    List<FlowDefinition> listAllTemplates();
 }

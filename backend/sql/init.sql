@@ -235,3 +235,68 @@ INSERT INTO knowledge_graph (user_id, name, description, paper_id, graph_data) V
     )
   )
 );
+
+-- 2026-05-16: 自定义 Agent 表
+CREATE TABLE IF NOT EXISTS custom_agent (
+    id           BIGINT       AUTO_INCREMENT PRIMARY KEY COMMENT 'AgentID',
+    user_id      BIGINT       NOT NULL                                COMMENT '所属用户',
+    name         VARCHAR(100) NOT NULL                                COMMENT '角色名称',
+    icon         VARCHAR(10)  DEFAULT '🤖'                            COMMENT '图标emoji',
+    description  VARCHAR(500)                                         COMMENT '角色描述',
+    system_prompt TEXT                                                COMMENT '自定义System Prompt',
+    model        VARCHAR(100) NOT NULL DEFAULT 'qwen-max'             COMMENT '默认模型',
+    temperature  DOUBLE       NOT NULL DEFAULT 0.7                    COMMENT '默认温度',
+    enabled      TINYINT      NOT NULL DEFAULT 1                      COMMENT '是否启用',
+    created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP      COMMENT '创建时间',
+    updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    INDEX idx_ca_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='自定义Agent';
+
+-- 2026-05-16: 参考文献表
+CREATE TABLE IF NOT EXISTS paper_reference (
+    id          BIGINT       AUTO_INCREMENT PRIMARY KEY COMMENT '引用ID',
+    paper_id    BIGINT       NOT NULL                                COMMENT '关联论文ID',
+    title       VARCHAR(500)                                         COMMENT '文献标题',
+    authors     VARCHAR(500)                                         COMMENT '作者',
+    year        INT                                                  COMMENT '发表年份',
+    journal     VARCHAR(300)                                         COMMENT '期刊/会议名',
+    volume      VARCHAR(50)                                          COMMENT '卷号',
+    issue       VARCHAR(50)                                          COMMENT '期号',
+    pages       VARCHAR(50)                                          COMMENT '页码',
+    doi         VARCHAR(200)                                         COMMENT 'DOI',
+    url         VARCHAR(500)                                         COMMENT '链接',
+    type        VARCHAR(30)  NOT NULL DEFAULT 'other'                COMMENT '类型: journal/conference/book/other',
+    raw_text    TEXT                                                 COMMENT '原始引用文本',
+    cited       TINYINT      NOT NULL DEFAULT 0                      COMMENT '是否已引用',
+    created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP      COMMENT '创建时间',
+    INDEX idx_ref_paper_id (paper_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='参考文献';
+
+-- 2026-05-17: RAG 知识库 — 文献表
+CREATE TABLE IF NOT EXISTS knowledge_document (
+    id          BIGINT       AUTO_INCREMENT PRIMARY KEY COMMENT '文献ID',
+    user_id     BIGINT       NOT NULL                                COMMENT '上传者',
+    filename    VARCHAR(300) NOT NULL                                COMMENT '原始文件名',
+    file_type   VARCHAR(20)  NOT NULL                                COMMENT 'pdf/docx/md/txt',
+    title       VARCHAR(500)                                         COMMENT '文献标题',
+    authors     VARCHAR(500)                                         COMMENT '作者',
+    year        INT                                                  COMMENT '年份',
+    scope       VARCHAR(10)  NOT NULL DEFAULT 'PRIVATE'              COMMENT 'PRIVATE/SHARED',
+    status      VARCHAR(10)  NOT NULL DEFAULT 'APPROVED'             COMMENT 'PENDING/APPROVED/REJECTED',
+    total_chunks INT         DEFAULT 0                               COMMENT '分块数',
+    total_chars  INT         DEFAULT 0                               COMMENT '总字数',
+    created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP      COMMENT '上传时间',
+    INDEX idx_kd_user_id (user_id),
+    INDEX idx_kd_scope (scope)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识库文献';
+
+-- 2026-05-17: RAG 知识库 — 分块表
+CREATE TABLE IF NOT EXISTS knowledge_chunk (
+    id          BIGINT       AUTO_INCREMENT PRIMARY KEY COMMENT '分块ID',
+    document_id BIGINT       NOT NULL                                COMMENT '所属文献ID',
+    chunk_index INT          NOT NULL                                COMMENT '分块序号',
+    content     TEXT         NOT NULL                                COMMENT '分块文本',
+    char_count  INT          DEFAULT 0                               COMMENT '字数',
+    created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP      COMMENT '创建时间',
+    INDEX idx_kc_doc_id (document_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识库分块';

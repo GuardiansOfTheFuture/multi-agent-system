@@ -33,7 +33,7 @@ public abstract class BaseAgent {
     /** 当前 Agent 的角色 */
     protected final AgentRole role;
 
-    /** Spring AI ChatClient */
+    /** Spring AI ChatClient（默认） */
     protected final ChatClient chatClient;
 
     /** LLM 响应缓存 */
@@ -42,10 +42,22 @@ public abstract class BaseAgent {
     /** 共享上下文 */
     protected AgentContext context;
 
+    /** 临时覆盖 ChatClient（节点级模型配置） */
+    private ChatClient customClient;
+
+    /** 临时覆盖 System Prompt（节点级自定义提示词） */
+    private String customPrompt;
+
     protected BaseAgent(AgentRole role, ChatClient chatClient, LlmCacheService llmCacheService) {
         this.role = role;
         this.chatClient = chatClient;
         this.llmCacheService = llmCacheService;
+    }
+
+    /** 重置节点级配置（每次 executeWithConfig 前调用） */
+    private void resetOverrides() {
+        this.customClient = null;
+        this.customPrompt = null;
     }
 
     /**
@@ -78,6 +90,36 @@ public abstract class BaseAgent {
     }
 
     /**
+     * 带节点级配置的执行 — 支持动态切换模型和自定义 System Prompt。
+     * FlowEngine 在节点有 config 时调用此方法而非 executeTaskStream。
+     *
+     * @param task         任务描述
+     * @param context      共享上下文
+     * @param onToken      流式回调
+     * @param modelClient  节点指定的 ChatClient（可为 null，则用默认）
+     * @param customPrompt 节点自定义 System Prompt（可为 null，则用默认）
+     * @return 最终完整结果
+     */
+    public String executeWithConfig(String task, AgentContext context, java.util.function.Consumer<String> onToken,
+                                     ChatClient modelClient, String customPrompt) {
+        resetOverrides();
+        this.customClient = modelClient;
+        this.customPrompt = (customPrompt != null && !customPrompt.isBlank()) ? customPrompt : null;
+        return executeTaskStream(task, context, onToken);
+    }
+
+    /** 获取当前有效 System Prompt（优先用节点级自定义） */
+    private String effectiveSystemPrompt() {
+        if (customPrompt != null && !customPrompt.isBlank()) return customPrompt;
+        return getSystemPrompt();
+    }
+
+    /** 获取当前有效 ChatClient（优先用节点级自定义） */
+    private ChatClient effectiveChatClient() {
+        return customClient != null ? customClient : chatClient;
+    }
+
+    /**
      * 与 LLM 对话（同步，一次性返回完整结果）
      * 请求/响应详情由 LoggerAdvisor 统一记录，此处只记 Agent 层面的启动和完成
      */
@@ -87,8 +129,8 @@ public abstract class BaseAgent {
         if (cached != null) return cached;
 
         try {
-            String response = chatClient.prompt()
-                    .system(getSystemPrompt())
+            String response = effectiveChatClient().prompt()
+                    .system(effectiveSystemPrompt())
                     .user(userMessage)
                     .call()
                     .content();
@@ -123,8 +165,8 @@ public abstract class BaseAgent {
         StringBuilder full = new StringBuilder();
 
         try {
-            String response = chatClient.prompt()
-                    .system(getSystemPrompt())
+            String response = effectiveChatClient().prompt()
+                    .system(effectiveSystemPrompt())
                     .user(userMessage)
                     .stream()
                     .content()

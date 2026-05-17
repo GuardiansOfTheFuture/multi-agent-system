@@ -74,15 +74,6 @@ public enum FlowProfile {
         this.forceReviewRounds = forceReviewRounds;
     }
 
-    public static FlowProfile fromId(String id) {
-        if (id == null) return STANDARD;
-        for (FlowProfile f : values()) {
-            if (f.id.equals(id)) return f;
-        }
-        return STANDARD;
-    }
-
-    /** 返回匹配的枚举值，无匹配返回 null（用于区分"匹配预设"和"未匹配"） */
     public static FlowProfile fromIdRaw(String id) {
         if (id == null) return null;
         for (FlowProfile f : values()) {

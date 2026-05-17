@@ -53,6 +53,12 @@ public class AgentContext {
     /** 任务状态追踪（Map<Agent角色, 状态>） */
     private final Map<String, TaskStatus> taskStatusMap = new ConcurrentHashMap<>();
 
+    /** 关联知识图谱的 graphData JSON 字符串 */
+    private String kgGraphData;
+
+    public String getKgGraphData() { return kgGraphData; }
+    public void setKgGraphData(String kgGraphData) { this.kgGraphData = kgGraphData; }
+
     /** 额外自定义数据 */
     private final Map<String, Object> attributes = new ConcurrentHashMap<>();
 
@@ -84,18 +90,6 @@ public class AgentContext {
 
     public List<AgentMessage> getMessages() {
         return Collections.unmodifiableList(messages);
-    }
-
-    public List<AgentMessage> getMessagesBySender(String roleCode) {
-        return messages.stream()
-                .filter(m -> m.getSender().getCode().equals(roleCode))
-                .toList();
-    }
-
-    public List<AgentMessage> getMessagesByReceiver(String roleCode) {
-        return messages.stream()
-                .filter(m -> m.getReceiver() != null && m.getReceiver().getCode().equals(roleCode))
-                .toList();
     }
 
     // ===== 任务状态 =====

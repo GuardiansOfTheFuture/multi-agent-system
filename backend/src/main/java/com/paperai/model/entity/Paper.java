@@ -44,6 +44,9 @@ public class Paper implements java.io.Serializable {
     /** 当前最新版本号 */
     private Integer currentVersion;
 
+    /** 关联的知识图谱ID */
+    private Long kgId;
+
     /** 创建时间 */
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;

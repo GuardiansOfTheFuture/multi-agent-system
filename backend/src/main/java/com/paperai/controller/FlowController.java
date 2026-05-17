@@ -44,9 +44,10 @@ public class FlowController {
             result.add(m);
         }
 
-        // 用户自定义流程
+        // 用户自定义流程（排除模板）
         List<FlowDefinition> userFlows = flowDefinitionService.listByUser(userId);
         for (FlowDefinition f : userFlows) {
+            if (f.getIsTemplate() != null && f.getIsTemplate() == 1) continue;
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", "custom-" + f.getId());
             m.put("dbId", f.getId());
@@ -96,6 +97,27 @@ public class FlowController {
     public ApiResultVO<String> delete(@PathVariable Long id, Authentication auth) {
         flowDefinitionService.delete(id, userId(auth));
         return ApiResultVO.success("流程已删除");
+    }
+
+    /**
+     * 模板列表 — 返回系统中所有模板流程
+     */
+    @GetMapping("/templates")
+    public ApiResultVO<List<FlowDefinition>> templates(Authentication auth) {
+        return ApiResultVO.success(flowDefinitionService.listAllTemplates());
+    }
+
+    /**
+     * 从模板创建流程 — 复制模板为用户的个人流程
+     */
+    @PostMapping("/templates/{id}/create")
+    public ApiResultVO<FlowDefinition> createFromTemplate(@PathVariable Long id, Authentication auth) {
+        FlowDefinition copy = flowDefinitionService.duplicate(id, userId(auth));
+        copy.setName(copy.getName() + " (副本)");
+        copy.setIsTemplate(0);
+        copy.setCategory("custom");
+        flowDefinitionService.update(copy.getId(), copy, userId(auth));
+        return ApiResultVO.success("从模板创建成功", copy);
     }
 
     /**

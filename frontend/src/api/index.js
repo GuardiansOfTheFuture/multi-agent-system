@@ -100,9 +100,14 @@ export function getPaperDetail(id) { return request.get(`/paper/${id}`) }
 export function getPaperTasks(id) { return request.get(`/paper/${id}/tasks`) }
 export function deletePaper(id) { return request.delete(`/paper/${id}`) }
 export function getAgentList() { return request.get('/agent/list') }
-export function chatWithAgent(agentName, topic, message) {
-  return request.post(`/agent/${agentName}/chat`, null, { params: { topic, message } })
+export function chatWithAgent(agentName, topic, message, model) {
+  return request.post(`/agent/${agentName}/chat`, null, { params: { topic, message, model } })
 }
+export function listCustomAgents() { return request.get('/agent/custom') }
+export function createCustomAgent(data) { return request.post('/agent/custom', data) }
+export function updateCustomAgent(id, data) { return request.put(`/agent/custom/${id}`, data) }
+export function deleteCustomAgent(id) { return request.delete(`/agent/custom/${id}`) }
+export function getAgentModels() { return request.get('/agent/models') }
 export function healthCheck() { return request.get('/paper/health') }
 
 // ===== 流程管理 =====
@@ -122,6 +127,50 @@ export function updateKg(id, data)     { return request.put(`/kg/${id}`, data) }
 export function deleteKg(id)           { return request.delete(`/kg/${id}`) }
 export function duplicateKg(id)        { return request.post(`/kg/${id}/duplicate`) }
 export function extractKg(data)        { return request.post('/kg/extract', data) }
+export function extractKgFromFile(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  const token = localStorage.getItem('paperai_token')
+  return fetch('/api/kg/extract-file', {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData
+  }).then(r => r.json())
+}
+
+// ===== 论文导出 =====
+export async function exportPaper(paperId, format, versionNo) {
+  let url = `/api/paper/${paperId}/export?format=${format}`
+  if (versionNo) url += `&versionNo=${versionNo}`
+  const token = localStorage.getItem('paperai_token')
+  const resp = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {}
+  })
+  if (!resp.ok) {
+    const err = await resp.text()
+    throw new Error(err || '导出失败')
+  }
+  const disposition = resp.headers.get('Content-Disposition') || ''
+  const match = disposition.match(/filename[^;=\n]*=["']?([^"';\n]*)["']?/)
+  let filename = match ? match[1] : `paper.${format}`
+  const blob = await resp.blob()
+  const downloadUrl = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = downloadUrl
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(downloadUrl)
+}
+
+// ===== 参考文献管理 =====
+export function listReferences(paperId) { return request.get(`/paper/${paperId}/references`) }
+export function addReference(paperId, data) { return request.post(`/paper/${paperId}/references`, data) }
+export function updateReference(paperId, refId, data) { return request.put(`/paper/${paperId}/references/${refId}`, data) }
+export function deleteReference(paperId, refId) { return request.delete(`/paper/${paperId}/references/${refId}`) }
+export function importBibtex(paperId, bibtex) { return request.post(`/paper/${paperId}/references/import-bibtex`, { bibtex }) }
+export function extractReferences(paperId) { return request.post(`/paper/${paperId}/references/extract`) }
 
 // ===== 版本管理 =====
 export function getPaperVersions(paperId) { return request.get(`/paper/${paperId}/versions`) }

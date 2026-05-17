@@ -45,6 +45,8 @@ public class PaperController {
     @Resource private com.paperai.service.StepEventPublisher stepEventPublisher;
     @Resource private ChatClient dashScopeChatClient;
     @Resource private LlmCacheService llmCacheService;
+    @Resource private com.paperai.service.ReferenceService referenceService;
+    @Resource private com.paperai.service.ExportService exportService;
 
 
 
@@ -282,6 +284,135 @@ public class PaperController {
                 "versionNo", pv.getVersionNo(),
                 "versionId", pv.getId()
         ));
+    }
+
+    // ===== 参考文献管理 =====
+
+    @GetMapping("/{paperId}/references")
+    public ApiResultVO<List<com.paperai.model.entity.Reference>> listReferences(
+            @PathVariable Long paperId, Authentication auth) {
+        paperService.checkOwner(paperId, userId(auth));
+        return ApiResultVO.success(referenceService.listByPaperId(paperId));
+    }
+
+    @PostMapping("/{paperId}/references")
+    public ApiResultVO<com.paperai.model.entity.Reference> addReference(
+            @PathVariable Long paperId,
+            @RequestBody com.paperai.model.entity.Reference ref,
+            Authentication auth) {
+        paperService.checkOwner(paperId, userId(auth));
+        return ApiResultVO.success("添加成功", referenceService.add(paperId, ref));
+    }
+
+    @PutMapping("/{paperId}/references/{refId}")
+    public ApiResultVO<com.paperai.model.entity.Reference> updateReference(
+            @PathVariable Long paperId,
+            @PathVariable Long refId,
+            @RequestBody com.paperai.model.entity.Reference ref,
+            Authentication auth) {
+        paperService.checkOwner(paperId, userId(auth));
+        return ApiResultVO.success("更新成功", referenceService.update(refId, ref, userId(auth)));
+    }
+
+    @DeleteMapping("/{paperId}/references/{refId}")
+    public ApiResultVO<String> deleteReference(
+            @PathVariable Long paperId,
+            @PathVariable Long refId,
+            Authentication auth) {
+        paperService.checkOwner(paperId, userId(auth));
+        referenceService.delete(refId, userId(auth));
+        return ApiResultVO.success("删除成功");
+    }
+
+    @PostMapping("/{paperId}/references/import-bibtex")
+    public ApiResultVO<Map<String, Object>> importBibtex(
+            @PathVariable Long paperId,
+            @RequestBody Map<String, String> body,
+            Authentication auth) {
+        paperService.checkOwner(paperId, userId(auth));
+        String bibtex = body.get("bibtex");
+        if (bibtex == null || bibtex.isBlank()) {
+            return ApiResultVO.error("BibTeX 内容不能为空");
+        }
+        int count = referenceService.importBibtex(paperId, bibtex);
+        return ApiResultVO.success("导入成功", Map.of("count", count));
+    }
+
+    @PostMapping("/{paperId}/references/extract")
+    public ApiResultVO<List<com.paperai.model.entity.Reference>> extractReferences(
+            @PathVariable Long paperId,
+            Authentication auth) {
+        paperService.checkOwner(paperId, userId(auth));
+        com.paperai.model.entity.Paper paper = paperService.getPaperById(paperId);
+        String researchOutput = null;
+        var tasks = agentTaskService.getTasksByPaperId(paperId);
+        for (var t : tasks) {
+            if ("RESEARCHER".equals(t.getAgentRole()) && t.getOutputData() != null) {
+                researchOutput = t.getOutputData();
+                break;
+            }
+        }
+        if (researchOutput == null) {
+            return ApiResultVO.error("未找到研究输出，请先执行研究步骤");
+        }
+        List<com.paperai.model.entity.Reference> refs = referenceService.extractFromResearchOutput(paperId, researchOutput);
+        return ApiResultVO.success("提取成功", refs);
+    }
+
+    // ===== 论文导出 =====
+
+    @GetMapping("/{id}/export")
+    public org.springframework.http.ResponseEntity<byte[]> exportPaper(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "docx") String format,
+            @RequestParam(required = false) Integer versionNo,
+            Authentication auth) {
+        paperService.checkOwner(id, userId(auth));
+
+        byte[] data;
+        String filename;
+        String contentType;
+        com.paperai.model.entity.Paper paper = paperService.getPaperById(id);
+        String title = paper.getTitle() != null ? paper.getTitle() : "paper";
+        String safeTitle = title.replaceAll("[\\\\/:*?\"<>|]", "_");
+        if (safeTitle.length() > 50) safeTitle = safeTitle.substring(0, 50);
+
+        switch (format.toLowerCase()) {
+            case "pdf" -> {
+                data = exportService.toPdf(id, versionNo);
+                filename = safeTitle + ".pdf";
+                contentType = "application/pdf";
+            }
+            case "latex" -> {
+                data = exportService.toLatex(id, versionNo);
+                filename = safeTitle + ".tex";
+                contentType = "application/x-latex";
+            }
+            case "html" -> {
+                data = exportService.toHtml(
+                        versionNo != null
+                                ? paperService.getVersion(id, versionNo).getContent()
+                                : paperService.getLatestVersion(id).getContent()
+                ).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                filename = safeTitle + ".html";
+                contentType = "text/html; charset=UTF-8";
+            }
+            default -> {
+                data = exportService.toDocx(id, versionNo);
+                filename = safeTitle + ".docx";
+                contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+            }
+        }
+
+        // 使用 ContentDisposition 避免中文文件名被 URL 编码为 %E5%9F%BA... 格式
+        org.springframework.http.ContentDisposition cd = org.springframework.http.ContentDisposition
+                .attachment()
+                .filename(filename, java.nio.charset.StandardCharsets.UTF_8)
+                .build();
+        return org.springframework.http.ResponseEntity.ok()
+                .contentType(org.springframework.http.MediaType.parseMediaType(contentType))
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, cd.toString())
+                .body(data);
     }
 
     @GetMapping("/health")

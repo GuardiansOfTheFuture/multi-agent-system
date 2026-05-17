@@ -36,12 +36,4 @@ public enum AgentRole {
         return description;
     }
 
-    public static AgentRole fromCode(String code) {
-        for (AgentRole role : values()) {
-            if (role.code.equals(code)) {
-                return role;
-            }
-        }
-        throw new IllegalArgumentException("Unknown AgentRole code: " + code);
-    }
 }

@@ -94,6 +94,15 @@ public class FlowDefinitionServiceImpl implements FlowDefinitionService {
     }
 
     @Override
+    public List<FlowDefinition> listAllTemplates() {
+        return flowDefinitionMapper.selectList(
+            new LambdaQueryWrapper<FlowDefinition>()
+                .eq(FlowDefinition::getIsTemplate, 1)
+                .orderByDesc(FlowDefinition::getUpdatedAt)
+        );
+    }
+
+    @Override
     @Transactional
     @CacheEvict(value = "flowDefinitions", key = "'user:' + #userId")
     public FlowDefinition duplicate(Long id, Long userId) {
