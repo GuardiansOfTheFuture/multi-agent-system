@@ -3,24 +3,19 @@ import { writePaper, getPaperList, getPaperDetail, deletePaper } from '@/api'
 
 export const usePaperStore = defineStore('paper', {
   state: () => ({
-    // 论文列表
     paperList: [],
-    // 当前查看的论文
     currentPaper: null,
-    // 当前论文的任务记录
     currentTasks: [],
-    // 写作执行状态
     isWriting: false,
-    // 当前写作执行步骤
     currentSteps: [],
-    // SSE 消息流
     streamMessages: [],
-    // 加载状态
-    loading: false
+    loading: false,
+    paperTotal: 0,
+    paperPage: 1,
+    paperSize: 10
   }),
 
   actions: {
-    /** 提交论文写作任务 */
     async submitWriting(data) {
       this.isWriting = true
       this.currentSteps = []
@@ -37,18 +32,19 @@ export const usePaperStore = defineStore('paper', {
       }
     },
 
-    /** 获取论文列表 */
-    async fetchPaperList() {
+    async fetchPaperList(page = 1) {
       this.loading = true
       try {
-        const res = await getPaperList()
-        this.paperList = res.data || []
+        const res = await getPaperList(page, this.paperSize)
+        const data = res.data || {}
+        this.paperList = data.records || []
+        this.paperTotal = data.total || 0
+        this.paperPage = page
       } finally {
         this.loading = false
       }
     },
 
-    /** 获取论文详情 */
     async fetchPaperDetail(id) {
       this.loading = true
       try {
@@ -60,10 +56,10 @@ export const usePaperStore = defineStore('paper', {
       }
     },
 
-    /** 删除论文 */
     async removePaper(id) {
       await deletePaper(id)
       this.paperList = this.paperList.filter(p => p.id !== id)
+      this.paperTotal = Math.max(0, this.paperTotal - 1)
     }
   }
 })

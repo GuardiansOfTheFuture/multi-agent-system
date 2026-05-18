@@ -15,6 +15,7 @@ public interface PaperService {
     List<Paper> listAll();
 
     List<Paper> listByUserId(Long userId);
+    com.baomidou.mybatisplus.extension.plugins.pagination.Page<Paper> listByUserId(Long userId, int page, int size);
 
     void checkOwner(Long paperId, Long userId);
 

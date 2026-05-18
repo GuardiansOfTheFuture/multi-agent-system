@@ -163,8 +163,17 @@ public class PaperController {
     // ===== 论文管理 CRUD =====
 
     @GetMapping("/list")
-    public ApiResultVO<List<Paper>> list(Authentication auth) {
-        return ApiResultVO.success(paperService.listByUserId(userId(auth)));
+    public ApiResultVO<Map<String, Object>> list(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int size,
+            Authentication auth) {
+        var pageResult = paperService.listByUserId(userId(auth), page, size);
+        return ApiResultVO.success(Map.of(
+            "records", pageResult.getRecords(),
+            "total", pageResult.getTotal(),
+            "page", page,
+            "size", size
+        ));
     }
 
     @GetMapping("/{id}")
@@ -236,21 +245,28 @@ public class PaperController {
         if (instruction == null || instruction.isBlank()) {
             return ApiResultVO.error("请输入修改指令");
         }
-        // 调用 AI 修改
-        String prompt = String.format("""
-                你是一位专业的学术论文编辑助手。
-                请根据以下指令，修改选中的论文文本。
-                只返回修改后的文本，不要添加额外解释。
+        String fullText = body.get("fullText");
+        String reviewComments = body.get("reviewComments");
 
-                选中文本：
-                %s
+        // 构建带上下文的 prompt
+        StringBuilder prompt = new StringBuilder("""
+                你是一位专业的学术论文编辑助手。请根据指令修改选中的文本，只返回修改后的内容，不要解释。
 
-                修改指令：
-                %s
-                """, selectedText, instruction);
-        String cacheKey = llmCacheService.computeKey(null, prompt);
+                """);
+
+        if (fullText != null && !fullText.isBlank()) {
+            prompt.append("【论文全文（上下文）】\n").append(fullText).append("\n\n");
+        }
+        if (reviewComments != null && !reviewComments.isBlank()) {
+            prompt.append("【审稿意见（修改时请参考）】\n").append(reviewComments).append("\n\n");
+        }
+
+        prompt.append("【选中文本（需要修改的部分）】\n").append(selectedText).append("\n\n");
+        prompt.append("【修改指令】\n").append(instruction);
+
+        String cacheKey = llmCacheService.computeKey(null, prompt.toString());
         String cached = llmCacheService.get(cacheKey);
-        String result = cached != null ? cached : dashScopeChatClient.prompt().user(prompt).call().content();
+        String result = cached != null ? cached : dashScopeChatClient.prompt().user(prompt.toString()).call().content();
         if (cached == null && result != null) llmCacheService.put(cacheKey, result);
         return ApiResultVO.success(Map.of(
                 "originalText", selectedText,

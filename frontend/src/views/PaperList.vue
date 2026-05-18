@@ -19,7 +19,7 @@
         :columns="columns"
         :loading="paperStore.loading"
         rowKey="id"
-        :pagination="{ pageSize: 10 }"
+        :pagination="{ current: paperStore.paperPage, pageSize: paperStore.paperSize, total: paperStore.paperTotal, showTotal: t => '共 ' + t + ' 篇', onChange: p => paperStore.fetchPaperList(p) }"
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'status'">

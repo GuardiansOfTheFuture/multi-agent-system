@@ -27,18 +27,20 @@ public class StepEventPublisher {
      * 为指定 paperId 创建一个 SSE 发射器，前端通过 GET /api/paper/write/{paperId}/stream 获取
      */
     public SseEmitter createEmitter(Long paperId) {
-        SseEmitter emitter = new SseEmitter(0L); // 0 = 无超时
+        SseEmitter emitter = new SseEmitter(30 * 60 * 1000L); // 30分钟超时自动清理
         emitters.computeIfAbsent(paperId, k -> new CopyOnWriteArrayList<>()).add(emitter);
 
-        emitter.onCompletion(() -> remove(paperId, emitter));
-        emitter.onTimeout(() -> remove(paperId, emitter));
-        emitter.onError(e -> remove(paperId, emitter));
+        emitter.onCompletion(() -> { remove(paperId, emitter); log.info("SSE completed: paperId={}", paperId); });
+        emitter.onTimeout(() -> { remove(paperId, emitter); log.info("SSE timeout: paperId={}", paperId); });
+        emitter.onError(e -> { remove(paperId, emitter); log.warn("SSE error paperId={}: {}", paperId, e.getMessage()); });
 
-        // 立即发送连接成功事件
         sendToOne(emitter, "connected", Map.of("paperId", paperId));
-
-        log.info("SSE emitter 创建: paperId={}", paperId);
+        log.info("SSE 创建: paperId={}, 当前活跃={}", paperId, countActive());
         return emitter;
+    }
+
+    private int countActive() {
+        return emitters.values().stream().mapToInt(List::size).sum();
     }
 
     private void remove(Long paperId, SseEmitter emitter) {

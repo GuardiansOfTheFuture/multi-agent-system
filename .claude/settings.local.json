@@ -17,7 +17,12 @@
       "WebSearch",
       "WebFetch(domain:bundlephobia.com)",
       "WebFetch(domain:www.npmjs.com)",
-      "WebFetch(domain:vueflow.dev)"
+      "WebFetch(domain:vueflow.dev)",
+      "Edit",
+      "Write",
+      "Read",
+      "Glob",
+      "Grep"
     ]
   }
 }

@@ -3,10 +3,8 @@ package com.paperai.config;
 import com.alibaba.cloud.ai.dashscope.api.DashScopeApi;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatModel;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
-import com.alibaba.cloud.ai.dashscope.embedding.DashScopeEmbeddingModel;
 import com.paperai.advisor.LoggerAdvisor;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -72,10 +70,17 @@ public class AiConfig {
                 .build();
     }
 
-    // ===== Embedding =====
+    // ===== 轻量 LLM 调用（分块/提取/摘要等非写作任务） =====
 
-    @Bean
-    public DashScopeEmbeddingModel embeddingModel() {
-        return new DashScopeEmbeddingModel(new DashScopeApi(apiKey));
+    @Value("${paperai.llm.light:qwen-turbo}")
+    private String lightModel;
+
+    /** 用轻量模型执行简单任务，返回纯文本 */
+    public String callLightLlm(String systemPrompt, String userMessage) {
+        return createChatClient(lightModel, 0.3).prompt()
+                .system(systemPrompt).user(userMessage).call().content();
     }
+
+    // Embedding 模型由 spring-ai-alibaba-autoconfigure 自动配置
+    // 模型名通过 application-local.yml 中 spring.ai.dashscope.embedding.options.model 指定
 }

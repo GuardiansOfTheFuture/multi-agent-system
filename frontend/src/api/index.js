@@ -95,7 +95,7 @@ export function startWriting(paperId, data) { return request.post(`/paper/write/
 export function stopWriting(paperId) { return request.post(`/paper/write/${paperId}/stop`) }
 export function writePaper(data) { return request.post('/paper/write', data) }
 export function doResearch(data) { return request.post('/paper/research', data) }
-export function getPaperList() { return request.get('/paper/list') }
+export function getPaperList(page = 1, size = 10) { return request.get('/paper/list', { params: { page, size } }) }
 export function getPaperDetail(id) { return request.get(`/paper/${id}`) }
 export function getPaperTasks(id) { return request.get(`/paper/${id}/tasks`) }
 export function deletePaper(id) { return request.delete(`/paper/${id}`) }
@@ -180,8 +180,8 @@ export function getLatestVersion(paperId) { return request.get(`/paper/${paperId
 export function updatePaperContent(paperId, versionNo, content) {
   return request.put(`/paper/${paperId}/content`, { versionNo, content })
 }
-export function agentEditPaper(paperId, selectedText, instruction) {
-  return request.post(`/paper/${paperId}/agent-edit`, { selectedText, instruction })
+export function agentEditPaper(paperId, selectedText, instruction, fullText, reviewComments) {
+  return request.post(`/paper/${paperId}/agent-edit`, { selectedText, instruction, fullText, reviewComments })
 }
 export function savePaperVersion(paperId, content, summary, editType = 'MANUAL', changeSummary = '') {
   return request.post(`/paper/${paperId}/versions`, { content, summary, editType, changeSummary })

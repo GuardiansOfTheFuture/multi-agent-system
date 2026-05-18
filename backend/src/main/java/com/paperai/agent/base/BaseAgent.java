@@ -8,45 +8,26 @@ import com.paperai.model.enums.AgentRole;
 import com.paperai.model.enums.TaskStatus;
 import com.paperai.model.AgentMessage;
 import com.paperai.service.LlmCacheService;
+import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.advisor.QuestionAnswerAdvisor;
+import org.springframework.ai.vectorstore.VectorStore;
 
-/**
- * Agent 抽象基类
- * 所有具体 Agent 都继承此类，提供：
- * - 角色定义（System Prompt）
- * - ChatClient 调用封装
- * - 消息收发协议
- * - 上下文读写
- * - 结构化输出解析
- *
- * @author: ch
- * @date 2026年05月11日
- */
 @Slf4j
 public abstract class BaseAgent {
 
-    /** LLM 调用异常的 ErrorCode */
     private static final int AI_CALL_ERROR_CODE = ResultCode.AI_SERVICE_ERROR.getCode();
 
-
-    /** 当前 Agent 的角色 */
     protected final AgentRole role;
-
-    /** Spring AI ChatClient（默认） */
     protected final ChatClient chatClient;
-
-    /** LLM 响应缓存 */
     protected final LlmCacheService llmCacheService;
-
-    /** 共享上下文 */
     protected AgentContext context;
-
-    /** 临时覆盖 ChatClient（节点级模型配置） */
     private ChatClient customClient;
-
-    /** 临时覆盖 System Prompt（节点级自定义提示词） */
     private String customPrompt;
+
+    @Resource
+    private VectorStore vectorStore;
 
     protected BaseAgent(AgentRole role, ChatClient chatClient, LlmCacheService llmCacheService) {
         this.role = role;
@@ -129,11 +110,11 @@ public abstract class BaseAgent {
         if (cached != null) return cached;
 
         try {
-            String response = effectiveChatClient().prompt()
+            var prompt = effectiveChatClient().prompt()
                     .system(effectiveSystemPrompt())
-                    .user(userMessage)
-                    .call()
-                    .content();
+                    .user(userMessage);
+            if (vectorStore != null) prompt = prompt.advisors(new QuestionAnswerAdvisor(vectorStore));
+            String response = prompt.call().content();
 
             log.info("[{}] LLM 响应完成，长度: {}", role.getDisplayName(),
                     response != null ? response.length() : 0);
@@ -165,11 +146,11 @@ public abstract class BaseAgent {
         StringBuilder full = new StringBuilder();
 
         try {
-            String response = effectiveChatClient().prompt()
+            var prompt = effectiveChatClient().prompt()
                     .system(effectiveSystemPrompt())
-                    .user(userMessage)
-                    .stream()
-                    .content()
+                    .user(userMessage);
+            if (vectorStore != null) prompt = prompt.advisors(new QuestionAnswerAdvisor(vectorStore));
+            String response = prompt.stream().content()
                     .doOnNext(chunk -> {
                         full.append(chunk);
                         onToken.accept(full.toString());

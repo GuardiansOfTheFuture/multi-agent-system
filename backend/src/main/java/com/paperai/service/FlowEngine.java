@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 
 import org.springframework.ai.chat.client.ChatClient;
 
+import java.io.File;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
@@ -36,7 +37,6 @@ public class FlowEngine {
     @Resource private AgentTaskService agentTaskService;
     @Resource private StepEventPublisher stepEventPublisher;
     @Resource private KnowledgeGraphService knowledgeGraphService;
-    @Resource private KnowledgeService knowledgeService;
     @Resource private com.paperai.config.AiConfig aiConfig;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -77,8 +77,23 @@ public class FlowEngine {
     public void execute(Long paperId, FlowDefinition def, PaperWritingRequestDTO req) {
         ExecState s = new ExecState(paperId, UUID.randomUUID().toString(), req.getTopic());
         s.ctx.setAttribute("direction", req.getDescription() != null ? req.getDescription() : "");
-        // 加载关联的知识图谱和用户 ID
-        try { com.paperai.model.entity.Paper p = paperService.getPaperById(paperId); s.userId = p.getUserId(); if(p.getKgId()!=null){ com.paperai.model.entity.KnowledgeGraph kg = knowledgeGraphService.getById(p.getKgId()); if(kg!=null&&kg.getGraphData()!=null) s.ctx.setKgGraphData(kg.getGraphData()); } } catch(Exception ignored){}
+        // 加载论文元数据（userId 用于 RAG 检索，kgId 用于上下文注入）
+        try {
+            com.paperai.model.entity.Paper p = paperService.getPaperById(paperId);
+            s.userId = p.getUserId();
+            com.paperai.service.KnowledgeService.currentUserId.set(p.getUserId());  // ThreadLocal for RAG
+            if (p.getKgId() != null) {
+                com.paperai.model.entity.KnowledgeGraph kg = knowledgeGraphService.getById(p.getKgId());
+                if (kg != null && kg.getGraphData() != null) {
+                    s.ctx.setKgGraphData(kg.getGraphData());
+                    log.info("[知识图谱] 论文「{}」关联知识图谱「{}」（ID:{}），{}实体",
+                            p.getTitle(), kg.getName(), kg.getId(),
+                            kg.getGraphData().length());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("加载论文元数据失败 paperId={}: {}", paperId, e.getMessage());
+        }
         runningTasks.put(paperId, false);
 
         String name = def.getName() != null ? def.getName() : "未知流程";
@@ -414,10 +429,13 @@ public class FlowEngine {
         }
 
         if (s.ctx.getResearchOutput() != null && !s.ctx.getResearchOutput().isBlank()) {
-            sb.append("【研究材料】\n").append(truncate(s.ctx.getResearchOutput(), 3000)).append("\n");
+            sb.append("【研究材料】\n").append(compressResearchOutput(s.ctx.getResearchOutput())).append("\n");
         } else if ("WRITER".equals(role)) {
             sb.append("【研究材料】\n（暂无研究材料，请基于你的知识库进行撰写，但请确保内容的学术准确性。如有不确定之处请标注）\n");
         }
+
+        // RAG 由 QuestionAnswerAdvisor 自动处理，不再手动注入
+        log.info("[知识库] 节点 role={} isTerminal={} userId={} — 问题增强由 Advisor 自动完成", role, isTerminal, s.userId);
 
         if (!s.ctx.getSections().isEmpty()) {
             if (isTerminal) {
@@ -425,6 +443,19 @@ public class FlowEngine {
                 if (lastSection != null) {
                     sb.append("【论文全文（已完成所有修改的最终版本）】\n");
                     sb.append(truncate(lastSection, 12000)).append("\n\n");
+                }
+            } else if ("WRITER".equals(role)) {
+                sb.append("【已撰写章节】\n");
+                String prevSectionEnd = null;
+                for (var entry : s.ctx.getSections().entrySet()) {
+                    String t = entry.getKey();
+                    String c = entry.getValue();
+                    sb.append("- ").append(t).append("（").append(c != null ? c.length() : 0).append("字）\n");
+                    if (c != null && c.length() > 200) prevSectionEnd = c.substring(c.length() - 200);
+                }
+                // 注入前一章结尾 200 字，帮助保持连贯
+                if (prevSectionEnd != null) {
+                    sb.append("\n【前一章结尾】\n").append(prevSectionEnd).append("\n");
                 }
             } else {
                 sb.append("【已撰写章节】\n");
@@ -556,24 +587,7 @@ public class FlowEngine {
                 """);
         }
 
-        // RAG 检索
-        if (!isTerminal && ("RESEARCHER".equals(role) || "WRITER".equals(role))) {
-            try {
-                List<org.springframework.ai.document.Document> ragDocs = knowledgeService.search(topic + " " + label, 5, s.userId);
-                if (ragDocs != null && !ragDocs.isEmpty()) {
-                    sb.append("\n\n【参考资料（来自你的文献库）】\n");
-                    int refIdx = 1;
-                    for (var d : ragDocs) {
-                        sb.append("[参考").append(refIdx).append("] ")
-                          .append(d.getMetadata().getOrDefault("docTitle", "文献")).append(":\n");
-                        sb.append(d.getText()).append("\n\n");
-                        refIdx++;
-                    }
-                }
-            } catch (Exception e) { log.warn("RAG 检索失败: {}", e.getMessage()); }
-        }
-
-        // 注入知识图谱上下文
+        // 知识图谱上下文（三元组格式）
         String kgData = s.ctx.getKgGraphData();
         if (kgData != null && !kgData.isBlank()) {
             try {
@@ -581,21 +595,38 @@ public class FlowEngine {
                 com.fasterxml.jackson.databind.JsonNode knodes = root.get("nodes");
                 com.fasterxml.jackson.databind.JsonNode kedges = root.get("edges");
                 if (knodes != null && knodes.size() > 0) {
-                    sb.append("\n\n【知识图谱参考】\n实体：");
+                    // 构建节点 ID → 名称映射
+                    Map<String, String> nodeNames = new java.util.LinkedHashMap<>();
                     for (com.fasterxml.jackson.databind.JsonNode n : knodes) {
-                        String kgLabel = n.has("data") ? n.get("data").get("label").asText() : (n.has("label") ? n.get("label").asText() : "");
-                        if (!kgLabel.isBlank()) sb.append(kgLabel).append("、");
+                        String nid = n.has("id") ? n.get("id").asText() : "";
+                        String nlabel = n.has("data") ? n.get("data").get("label").asText() : (n.has("label") ? n.get("label").asText() : "");
+                        if (!nid.isBlank() && !nlabel.isBlank()) nodeNames.put(nid, nlabel);
                     }
+                    sb.append("\n\n【知识图谱参考】（请在撰写时保持以下概念和关系的一致性）\n");
                     if (kedges != null && kedges.size() > 0) {
-                        sb.append("\n关系：");
                         for (com.fasterxml.jackson.databind.JsonNode e : kedges) {
-                            String relLabel = e.has("data") ? e.get("data").get("label").asText() : "";
-                            if (!relLabel.isBlank()) sb.append(relLabel).append("、");
+                            String src = e.has("source") ? e.get("source").asText() : "";
+                            String tgt = e.has("target") ? e.get("target").asText() : "";
+                            String rel = e.has("data") ? e.get("data").get("label").asText() : "";
+                            String srcName = nodeNames.getOrDefault(src, src);
+                            String tgtName = nodeNames.getOrDefault(tgt, tgt);
+                            if (!srcName.isBlank() && !tgtName.isBlank()) {
+                                sb.append("- ").append(srcName).append(" → ")
+                                  .append(rel.isBlank() ? "关联" : rel).append(" → ").append(tgtName).append("\n");
+                            }
                         }
                     }
-                    sb.append("\n请在撰写时保持与图中概念和关系的一致性。\n");
+                    // 补充孤立实体
+                    sb.append("实体：");
+                    int count = 0;
+                    for (String name : nodeNames.values()) {
+                        sb.append(name).append("、");
+                        if (++count % 8 == 0) sb.append("\n");
+                    }
+                    sb.append("\n");
+                    log.info("[知识图谱] 论文「{}」关联了知识图谱，{}实体，{}关系", topic, knodes.size(), kedges != null ? kedges.size() : 0);
                 }
-            } catch(Exception ignored){}
+            } catch(Exception e) { log.warn("知识图谱解析失败: {}", e.getMessage()); }
         }
 
         return sb.toString();
@@ -603,6 +634,30 @@ public class FlowEngine {
 
     private String truncate(String s, int max) {
         return s == null ? "" : s.length() > max ? s.substring(0, max) + "..." : s;
+    }
+
+    /** LLM 语义压缩研究输出：保留关键发现+方法+重要引用，最多 2500 字 */
+    private String compressResearchOutput(String research) {
+        if (research == null || research.length() <= 4000) return research;
+        try {
+            String prompt = """
+                你是学术编辑。把以下研究材料压缩到 2500 字以内，要求：
+                1. 保留所有关键发现和结论（最重要）
+                2. 保留核心方法名称和原理
+                3. 保留 5 条最重要的参考文献
+                4. 删掉冗余描述、重复背景介绍
+                5. 直接输出压缩后的文本，不要解释
+
+                %s
+                """.formatted(research);
+            String result = aiConfig.callLightLlm("你是学术编辑，擅长提炼关键信息。", prompt);
+            log.info("[LLM压缩] 研究材料: {}字 → {}字", research.length(),
+                     result != null ? result.length() : 0);
+            return result != null && !result.isBlank() ? result : research;
+        } catch (Exception e) {
+            log.warn("LLM压缩失败，回退原文: {}", e.getMessage());
+            return research;
+        }
     }
 
     private AgentRole tryParseRole(String roleStr) {
@@ -632,43 +687,23 @@ public class FlowEngine {
 
     private String extractTopicSuggestion(String text) {
         if (text == null) return null;
-        String[] patterns = {
-            "建议(?:题目|选题|改为)[：:]\\s*(.+?)(?:[。\\n]|$)",
-            "推荐(?:题目|选题)[：:]\\s*(.+?)(?:[。\\n]|$)",
-            "题目[可]?(?:改为|调整为)[：:]\\s*(.+?)(?:[。\\n]|$)",
-            "选题建议[：:]\\s*(.+?)(?:[。\\n]|$)"
-        };
-        for (String pat : patterns) {
-            java.util.regex.Pattern p = java.util.regex.Pattern.compile(pat);
-            java.util.regex.Matcher m = p.matcher(text);
-            if (m.find()) {
-                return m.group(1).trim().replaceAll("^[「「《『\"]|[」」》』\"]$", "");
-            }
-        }
-        return null;
+        try {
+            String result = aiConfig.callLightLlm(
+                "你是文本提取器。从导师评审意见中提取建议的论文题目。如果没有，返回 NONE。只返回题目或 NONE，不要其他文字。",
+                text);
+            return result != null && !result.contains("NONE") && result.length() > 2 ? result.trim() : null;
+        } catch (Exception e) { return null; }
     }
 
     private double extractScore(String text) {
         if (text == null || text.isBlank()) return 5.0;
-        String[] scorePatterns = {
-            "评分[：:]\\s*(\\d+\\.?\\d*)",
-            "综合评分[：:]\\s*(\\d+\\.?\\d*)",
-            "(\\d+\\.?\\d*)\\s*/\\s*10",
-            "(\\d+\\.?\\d*)\\s*分"
-        };
-        for (String pat : scorePatterns) {
-            java.util.regex.Pattern p = java.util.regex.Pattern.compile(pat);
-            java.util.regex.Matcher m = p.matcher(text);
-            if (m.find()) {
-                try {
-                    double score = Double.parseDouble(m.group(1));
-                    if (score > 10) score = score / 10.0;
-                    return score;
-                } catch (NumberFormatException ignored) {}
-            }
-        }
-        if (text.contains("严重问题")) return 4.0;
-        return 5.0;
+        try {
+            String result = aiConfig.callLightLlm(
+                "你是评分提取器。从审稿意见中提取 1-10 的综合评分，只返回数字（如 7.5）。如果没有评分，返回 5。只返回数字，不要其他文字。",
+                text);
+            double s = Double.parseDouble(result.trim());
+            return s > 10 ? s / 10.0 : s;
+        } catch (Exception e) { return 5.0; }
     }
 
     private void publishNodeStatus(ExecState s, String nodeId, String status, String label, AgentRole role) {
@@ -683,30 +718,62 @@ public class FlowEngine {
     private void finish(ExecState s, GraphData g) {
         String draft = buildDraft(s, g);
         s.ctx.setFinalDraft(draft);
-        paperService.saveVersion(s.paperId, "FINAL", "论文终稿", draft);
-        paperService.updateStatus(s.paperId, Constants.PAPER_STATUS_COMPLETED);
 
-        try {
-            String reviewTask = """
-                【论文主题】%s
+        int maxRetries = 2;
+        for (int attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                String reviewTask = """
+                    【论文主题】%s
 
-                【论文全文】
-                %s
+                    【论文全文】
+                    %s
 
-                请对以上论文进行最终质量评审，输出格式：
-                ### 总体评分: X.X/10
-                ### 总体评价
-                ### 逐章评审意见
-                ### 改进建议
-                """.formatted(s.ctx.getTopic(), truncate(draft, 10000));
+                    请对以上论文进行最终质量评审，输出格式：
+                    ### 总体评分: X.X/10
+                    ### 总体评价
+                    ### 逐章评审意见
+                    ### 改进建议
+                    """.formatted(s.ctx.getTopic(), truncate(draft, 10000));
 
-            String review = reviewerAgent.executeTaskStream(reviewTask, s.ctx, null);
-            if (review != null && !review.isBlank()) {
-                paperService.saveVersion(s.paperId, "REVIEW", "自动审稿意见", review);
-                log.info("自动审稿完成 paperId={}, reviewLength={}", s.paperId, review.length());
+                String review = reviewerAgent.executeTaskStream(reviewTask, s.ctx, null);
+                if (review == null || review.isBlank()) break;
+
+                double score = extractScore(review);
+                log.info("[质量门禁] paperId={}, 第{}轮评分={}", s.paperId, attempt + 1, score);
+
+                if (score >= 7.0 || attempt >= maxRetries) {
+                    String stage = score >= 7.0 ? "FINAL" : "REVIEWED";
+                    String summary = score >= 7.0 ? "论文终稿（评分 " + score + "）" : "论文终稿（评分 " + score + "，需人工审核）";
+                    paperService.saveVersion(s.paperId, stage, summary, draft);
+                    paperService.saveVersion(s.paperId, "REVIEW", "自动审稿意见", review);
+                    paperService.updateStatus(s.paperId, score >= 7.0 ? Constants.PAPER_STATUS_COMPLETED : Constants.PAPER_STATUS_FAILED);
+                    log.info("[质量门禁] paperId={} 通过，最终评分={}", s.paperId, score);
+                    break;
+                }
+
+                // 评分不达标，注入审稿意见后重写
+                log.info("[质量门禁] paperId={} 评分不足（{}<7.0），开始第{}轮重写", s.paperId, score, attempt + 1);
+                String revisionTask = """
+                    【论文主题】%s
+
+                    【审稿意见（请逐条修改）】
+                    %s
+
+                    【当前论文】
+                    %s
+
+                    请根据以上审稿意见修改论文。严格对照每一条意见，输出修改后的完整论文。
+                    如果是严重问题（评分 < 7），请彻底修改相关内容，不要只做表面调整。
+                    """.formatted(s.ctx.getTopic(), review, truncate(draft, 8000));
+
+                draft = writerAgent.executeTaskStream(revisionTask, s.ctx, null);
+                if (draft == null || draft.isBlank()) break;
+                s.ctx.setFinalDraft(draft);
+
+            } catch (Exception e) {
+                log.warn("质量门禁异常 paperId={}: {}", s.paperId, e.getMessage());
+                break;
             }
-        } catch (Exception e) {
-            log.warn("自动审稿失败 paperId={}: {}", s.paperId, e.getMessage());
         }
 
         log.info("===== FlowEngine 完成 paperId={} =====", s.paperId);

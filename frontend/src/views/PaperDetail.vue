@@ -113,17 +113,27 @@
                 已选中 {{ selectedText.length }} 字 ✕
               </a-tag>
             </a-space>
+            <a-button size="small" :type="showPreview ? 'primary' : 'default'" @click="showPreview = !showPreview">
+              <eye-outlined /> {{ showPreview ? '关闭预览' : '预览' }}
+            </a-button>
           </div>
-          <textarea
-            ref="editorRef"
-            v-model="editableContent"
-            class="edit-textarea"
-            @select="handleTextSelect"
-            @mouseup="handleTextSelect"
-            @keyup.shift="handleTextSelect"
-            @keyup.ctrl="handleTextSelect"
-            placeholder="在此编辑论文内容..."
-          />
+          <div :class="showPreview ? 'edit-split' : 'edit-full'">
+            <textarea
+              ref="editorRef"
+              v-model="editableContent"
+              class="edit-textarea"
+              :class="{ 'edit-textarea-half': showPreview }"
+              @select="handleTextSelect"
+              @mouseup="handleTextSelect"
+              @keyup.shift="handleTextSelect"
+              @keyup.ctrl="handleTextSelect"
+              placeholder="在此编辑论文内容..."
+            />
+            <div v-if="showPreview" class="edit-preview markdown-body">
+              <div class="edit-preview-label">预览</div>
+              <MarkdownRender :content="editableContent" />
+            </div>
+          </div>
         </template>
       </main>
 
@@ -335,7 +345,8 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   CloseOutlined,
-  DownloadOutlined
+  DownloadOutlined,
+  EyeOutlined
 } from '@ant-design/icons-vue'
 import {
   getPaperTasks,
@@ -363,6 +374,7 @@ const displayedContent = ref('')
 // ===== 编辑模式 =====
 const isEditing = ref(false)
 const editableContent = ref('')
+const showPreview = ref(false)
 const selectedText = ref('')
 const selectionStart = ref(0)
 const selectionEnd = ref(0)
@@ -484,7 +496,9 @@ async function handleAgentEdit() {
     const res = await agentEditPaper(
       Number(route.params.id),
       selectedText.value,
-      agentInstruction.value
+      agentInstruction.value,
+      editableContent.value,
+      reviewComments.value.join('\n')
     )
     agentResult.value = res.data?.modifiedText || ''
     message.success('AI 修改完成，请预览结果')

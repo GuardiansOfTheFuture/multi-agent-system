@@ -3,6 +3,7 @@ package com.paperai.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.paperai.mapper.KnowledgeChunkMapper;
 import com.paperai.mapper.KnowledgeDocumentMapper;
+import com.paperai.config.RagConfig;
 import com.paperai.model.entity.KnowledgeChunk;
 import com.paperai.model.entity.KnowledgeDocument;
 import jakarta.annotation.Resource;
@@ -22,11 +23,15 @@ import java.util.*;
 
 @Slf4j
 @Service
-public class KnowledgeService {
+public class KnowledgeService implements VectorStore {
+
+    /** 当前请求的用户 ID，由 FlowEngine 在执行前设置 */
+    public static final ThreadLocal<Long> currentUserId = new ThreadLocal<>();
 
     @Resource private KnowledgeDocumentMapper docMapper;
     @Resource private KnowledgeChunkMapper chunkMapper;
     @Resource private EmbeddingModel embeddingModel;
+    @Resource private RagConfig ragConfig;
 
     // ===== 上传入库 =====
 
@@ -68,7 +73,7 @@ public class KnowledgeService {
         int chunkIdx = 0;
         for (Document d : docs) {
             String text = d.getText();
-            List<String> parts = text.length() <= 2000 ? List.of(text) : splitChunk(text, 2000);
+            List<String> parts = text.length() <= 2000 ? List.of(text) : llmSplitChunk(text);
             for (String part : parts) {
                 // chunk 表存文本
                 KnowledgeChunk kc = new KnowledgeChunk();
@@ -97,30 +102,118 @@ public class KnowledgeService {
         return kd;
     }
 
-    // ===== 检索（加载用户所有 JSON 合并检索） =====
+    // ===== 混合检索（向量 + 关键词 + 重排序） =====
 
-    public List<Document> search(String query, int k, Long userId) {
-        List<Document> results = new ArrayList<>();
-        File userDir = new File("data/" + userId);
-        File[] files = userDir.listFiles((d, n) -> n.endsWith(".json"));
-        if (files == null) return results;
+    public List<Document> search(String query, int finalK, Long userId) {
+        RagConfig cfg = ragConfig;
+        Set<String> seen = new LinkedHashSet<>(); // 去重
+        List<Document> all = new ArrayList<>();
 
-        // 分别查每个文档的 store，合并
-        for (File f : files) {
-            try {
-                SimpleVectorStore store = SimpleVectorStore.builder(embeddingModel).build();
-                store.load(f);
-                results.addAll(store.similaritySearch(
-                        SearchRequest.builder().query(query).topK(3)
-                                .similarityThreshold(0.5).build()));
-            } catch (Exception e) { log.warn("检索 {} 失败: {}", f.getName(), e.getMessage()); }
+        // 1. 向量检索
+        if (cfg.getVectorTopK() > 0) {
+            File userDir = new File("data/" + userId);
+            File[] files = userDir.listFiles((d, n) -> n.endsWith(".json"));
+            if (files != null) {
+                for (File f : files) {
+                    try {
+                        SimpleVectorStore store = SimpleVectorStore.builder(embeddingModel).build();
+                        store.load(f);
+                        List<Document> vec = store.similaritySearch(
+                                SearchRequest.builder().query(query).topK(cfg.getVectorTopK())
+                                        .similarityThreshold(cfg.getSimilarityThreshold()).build());
+                        for (Document d : vec) {
+                            if (seen.add(fingerprint(d.getText()))) all.add(d);
+                        }
+                    } catch (Exception e) { log.warn("向量检索 {} 失败: {}", f.getName(), e.getMessage()); }
+                }
+            }
         }
-        // 按相似度排序取 Top-K
-        return results.stream()
-                .sorted((a, b) -> Double.compare(
-                        ((Number) b.getMetadata().getOrDefault("similarity", 0.0)).doubleValue(),
-                        ((Number) a.getMetadata().getOrDefault("similarity", 0.0)).doubleValue()))
-                .limit(k).toList();
+
+        // 2. 关键词检索（MySQL LIKE）
+        if (cfg.isHybridEnabled() && cfg.getKeywordTopK() > 0) {
+            List<KnowledgeChunk> kwChunks = keywordSearch(query, cfg.getKeywordTopK(), userId);
+            for (KnowledgeChunk kc : kwChunks) {
+                if (seen.add(fingerprint(kc.getContent()))) {
+                    all.add(new Document(kc.getContent(), Map.of("docTitle", "", "chunkIndex", kc.getChunkIndex())));
+                }
+            }
+        }
+
+        // 3. 按相似度排序
+        all.sort((a, b) -> Double.compare(
+                ((Number) b.getMetadata().getOrDefault("similarity", 0.0)).doubleValue(),
+                ((Number) a.getMetadata().getOrDefault("similarity", 0.0)).doubleValue()));
+
+        // 4. 重排序（DashScope gte-rerank）
+        if (cfg.isRerankEnabled() && all.size() > finalK) {
+            all = rerank(query, all, cfg.getFinalTopK());
+        }
+
+        // 5. 截断到最终数量
+        return all.stream().limit(finalK).toList();
+    }
+
+    /** 关键词检索：MySQL 全文搜索分块文本 */
+    private List<KnowledgeChunk> keywordSearch(String query, int topK, Long userId) {
+        // 按空格拆词，每个词至少出现一次
+        String[] words = query.split("[\\s,，。]+");
+        LambdaQueryWrapper<KnowledgeChunk> wrapper = new LambdaQueryWrapper<>();
+        for (String w : words) {
+            if (w.length() >= 2) wrapper.like(KnowledgeChunk::getContent, w);
+        }
+        wrapper.last("LIMIT " + topK);
+        return chunkMapper.selectList(wrapper);
+    }
+
+    /** 调用 DashScope gte-rerank 重排序 */
+    private List<Document> rerank(String query, List<Document> candidates, int topK) {
+        try {
+            // DashScope ReRank API
+            String url = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank";
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("model", ragConfig.getRerankModel());
+            body.put("input", Map.of("query", query, "documents",
+                    candidates.stream().map(Document::getText).toList()));
+            body.put("parameters", Map.of("top_n", topK, "return_documents", false));
+
+            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+            headers.set("Authorization", "Bearer " + resolveApiKey());
+            headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+            org.springframework.http.HttpEntity<Map<String, Object>> req =
+                    new org.springframework.http.HttpEntity<>(body, headers);
+            var resp = new org.springframework.web.client.RestTemplate()
+                    .postForEntity(url, req, Map.class);
+            var respBody = resp.getBody();
+            if (respBody != null && respBody.get("output") != null) {
+                @SuppressWarnings("unchecked")
+                var output = (Map<String, Object>) respBody.get("output");
+                @SuppressWarnings("unchecked")
+                var results = (List<Map<String, Object>>) output.get("results");
+                if (results != null) {
+                    List<Document> reranked = new ArrayList<>();
+                    for (var r : results) {
+                        int idx = ((Number) r.get("index")).intValue();
+                        if (idx < candidates.size()) {
+                            Document d = candidates.get(idx);
+                            d.getMetadata().put("rerank_score", r.get("relevance_score"));
+                            reranked.add(d);
+                        }
+                    }
+                    log.info("[ReRank] {} 条 → {} 条", candidates.size(), reranked.size());
+                    return reranked;
+                }
+            }
+        } catch (Exception e) { log.warn("ReRank 失败: {}", e.getMessage()); }
+        return candidates.stream().limit(topK).toList();
+    }
+
+    private String fingerprint(String text) {
+        return text.length() < 60 ? text : text.substring(0, 30) + text.substring(text.length() - 30);
+    }
+
+    private String resolveApiKey() {
+        String key = System.getenv("DASHSCOPE_API_KEY");
+        return key != null ? key : "sk-f4ab3e4883774139a7ab2e8f54c4f115";
     }
 
     // ===== 分块查询（从 MySQL） =====
@@ -156,25 +249,82 @@ public class KnowledgeService {
         docMapper.deleteById(docId);
     }
 
-    // ===== 分块 =====
+    // ===== LLM 语义分块 =====
 
-    static List<String> splitChunk(String text, int maxLen) {
-        List<String> result = new ArrayList<>();
-        int start = 0;
-        while (start < text.length()) {
-            int end = Math.min(start + maxLen, text.length());
-            if (end < text.length()) {
-                int cut = text.lastIndexOf("。", end);
-                if (cut <= start + maxLen / 2) cut = text.lastIndexOf("\n", end);
-                if (cut > start + maxLen / 2) end = cut + 1;
+    @Resource private com.paperai.config.AiConfig aiConfig;
+
+    /** LLM 语义分块：调用一次轻量模型，按主题边界切分并提取标题。失败回退简单切分。 */
+    List<String> llmSplitChunk(String text) {
+        try {
+            String sample = text.length() > 20000 ? text.substring(0, 20000) : text;
+            String prompt = """
+                你是文档工程师。把以下文档按语义边界切成块，每块 500~2000 字。
+                输出严格 JSON：[{"title":"章节标题","content":"块文本"}, ...]
+                要求：标题概括内容；不在句子中间切；保留表格代码块完整；只输出 JSON 数组，无其他文字。
+
+                文档：
+                %s
+                """.formatted(sample);
+            String resp = aiConfig.callLightLlm("你是文档工程师，擅长分析文档结构。", prompt);
+            // 解析 JSON
+            int start = resp.indexOf('['), end = resp.lastIndexOf(']');
+            if (start >= 0 && end > start) {
+                List<Map<String, Object>> items = new com.fasterxml.jackson.databind.ObjectMapper()
+                        .readValue(resp.substring(start, end + 1), List.class);
+                List<String> result = new ArrayList<>();
+                for (var item : items) {
+                    String title = (String) item.get("title");
+                    String content = (String) item.get("content");
+                    if (title != null && content != null) {
+                        result.add("## " + title + "\n" + content);
+                    } else if (content != null) {
+                        result.add(content);
+                    }
+                }
+                if (!result.isEmpty()) return result;
             }
-            result.add(text.substring(start, end).trim());
-            start = end;
+        } catch (Exception e) { log.warn("LLM分块失败，回退简单切分: {}", e.getMessage()); }
+        return simpleSplit(text, 2000);
+    }
+
+    static List<String> simpleSplit(String text, int maxLen) {
+        List<String> result = new ArrayList<>();
+        String[] paras = text.split("\n\n");
+        StringBuilder buf = new StringBuilder();
+        for (String p : paras) {
+            String t = p.trim();
+            if (t.isEmpty()) continue;
+            if (buf.length() + t.length() > maxLen && buf.length() > 100) {
+                result.add(buf.toString().trim());
+                buf = new StringBuilder(t);
+            } else {
+                if (buf.length() > 0) buf.append("\n\n");
+                buf.append(t);
+            }
         }
+        if (buf.length() > 0) result.add(buf.toString().trim());
         return result;
     }
 
     static String sanitize(String name) {
         return name == null ? "unnamed" : name.replaceAll("[\\\\/:*?\"<>|]", "_").replace(".json", "");
     }
+
+    // ===== VectorStore 接口（供 QuestionAnswerAdvisor 使用） =====
+
+    @Override
+    public void add(List<Document> documents) {
+        // 上传时已有专门逻辑，此处预留
+    }
+
+    @Override
+    public List<Document> similaritySearch(SearchRequest request) {
+        Long uid = currentUserId.get();
+        if (uid == null) return Collections.emptyList();
+        return search(request.getQuery(), request.getTopK(), uid);
+    }
+
+    @Override public void delete(String id) { }
+    @Override public void delete(java.util.List<String> idList) { }
+    @Override public void delete(org.springframework.ai.vectorstore.filter.Filter.Expression filterExpression) { }
 }

@@ -73,13 +73,21 @@ public class PaperServiceImpl implements PaperService {
     }
 
     @Override
-    @Cacheable(value = "papers", key = "'user:' + #userId")
     public List<Paper> listByUserId(Long userId) {
         return paperMapper.selectList(
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Paper>()
                         .eq(Paper::getUserId, userId)
                         .orderByDesc(Paper::getCreatedAt)
         );
+    }
+
+    @Override
+    public com.baomidou.mybatisplus.extension.plugins.pagination.Page<Paper> listByUserId(Long userId, int page, int size) {
+        var p = new com.baomidou.mybatisplus.extension.plugins.pagination.Page<Paper>(page, size);
+        return paperMapper.selectPage(p,
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Paper>()
+                        .eq(Paper::getUserId, userId)
+                        .orderByDesc(Paper::getCreatedAt));
     }
 
     @Override
