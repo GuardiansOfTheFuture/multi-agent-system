@@ -7,10 +7,14 @@ import com.paperai.service.PaperService;
 import com.paperai.service.ReferenceService;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.CacheManager;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -20,8 +24,10 @@ public class ReferenceServiceImpl implements ReferenceService {
 
     @Resource private ReferenceMapper referenceMapper;
     @Resource private PaperService paperService;
+    @Resource private CacheManager cacheManager;
 
     @Override
+    @Cacheable(value = "references", key = "'paper:' + #paperId")
     public List<Reference> listByPaperId(Long paperId) {
         return referenceMapper.selectList(
                 new LambdaQueryWrapper<Reference>()
@@ -35,6 +41,7 @@ public class ReferenceServiceImpl implements ReferenceService {
     }
 
     @Override
+    @CacheEvict(value = "references", key = "'paper:' + #paperId")
     public Reference add(Long paperId, Reference ref) {
         ref.setPaperId(paperId);
         if (ref.getCited() == null) ref.setCited(0);
@@ -50,6 +57,7 @@ public class ReferenceServiceImpl implements ReferenceService {
         paperService.checkOwner(existing.getPaperId(), userId);
         ref.setId(id);
         referenceMapper.updateById(ref);
+        evictReferenceCache(existing.getPaperId());
         return referenceMapper.selectById(id);
     }
 
@@ -59,9 +67,11 @@ public class ReferenceServiceImpl implements ReferenceService {
         if (existing == null) throw new RuntimeException("参考文献不存在");
         paperService.checkOwner(existing.getPaperId(), userId);
         referenceMapper.deleteById(id);
+        evictReferenceCache(existing.getPaperId());
     }
 
     @Override
+    @CacheEvict(value = "references", key = "'paper:' + #paperId")
     public int importBibtex(Long paperId, String bibtexText) {
         List<Reference> refs = parseBibtex(bibtexText);
         int count = 0;
@@ -76,6 +86,7 @@ public class ReferenceServiceImpl implements ReferenceService {
     }
 
     @Override
+    @CacheEvict(value = "references", key = "'paper:' + #paperId")
     public List<Reference> extractFromResearchOutput(Long paperId, String researchOutput) {
         if (researchOutput == null || researchOutput.isBlank()) return List.of();
         List<Reference> refs = new ArrayList<>();
@@ -103,6 +114,12 @@ public class ReferenceServiceImpl implements ReferenceService {
             referenceMapper.insert(ref);
         }
         return refs;
+    }
+
+    private void evictReferenceCache(Long paperId) {
+        if (paperId != null) {
+            Objects.requireNonNull(cacheManager.getCache("references")).evict("paper:" + paperId);
+        }
     }
 
     // ---- BibTeX parsing ----

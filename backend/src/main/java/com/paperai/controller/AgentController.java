@@ -2,7 +2,7 @@ package com.paperai.controller;
 
 import com.paperai.model.enums.AgentRole;
 import com.paperai.model.vo.ApiResultVO;
-import com.paperai.service.LlmCacheService;
+import com.paperai.cache.LlmCacheService;
 import com.paperai.config.AiConfig;
 import jakarta.annotation.Resource;
 import org.springframework.ai.chat.client.ChatClient;

@@ -22,6 +22,8 @@ public class KnowledgeDocument implements java.io.Serializable {
     private Integer totalChunks;
     private Integer totalChars;
     private String storePath;
+    /** embedding 向量维度，用于检测模型变更后向量不兼容 */
+    private Integer embedDim;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;

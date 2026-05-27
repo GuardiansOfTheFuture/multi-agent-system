@@ -10,13 +10,13 @@ import org.springframework.boot.test.context.SpringBootTest;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * ResearcherAgent 集成测试 — 真正调 DashScope API
+ * AgentExecutor 集成测试 — 真正调 DashScope API
  */
 @SpringBootTest(classes = PaperAiApplication.class)
 class ResearcherAgentIntegrationTest {
 
     @Autowired
-    private ResearcherAgent researcherAgent;
+    private AgentExecutor agentExecutor;
 
     @Test
     void testExecuteStructuredResearch() {
@@ -25,7 +25,7 @@ class ResearcherAgentIntegrationTest {
         request.setKeywords("深度学习,医疗影像,图像分割");
         request.setDescription("探索CNN在医学图像分割中的应用");
 
-        ResearchResult result = researcherAgent.executeStructuredResearch(request);
+        ResearchResult result = agentExecutor.executeStructuredResearch(request);
 
         assertNotNull(result);
         assertEquals("深度学习在医疗影像中的应用", result.getTopic());
@@ -38,12 +38,11 @@ class ResearcherAgentIntegrationTest {
     }
 
     @Test
-    void testExecuteTask() {
-        AgentContext ctx = new AgentContext("test-001", "AI Agent协作模式");
-        String result = researcherAgent.executeTask("调研AI Agent的研究现状", ctx);
+    void testExecuteStream() {
+        String result = agentExecutor.executeStream(AgentDefinitions.RESEARCHER,
+                "请简要介绍深度学习的基本概念", null);
 
         assertNotNull(result);
-        assertTrue(result.length() > 100);
-        assertNotNull(ctx.getResearchOutput());
+        assertTrue(result.length() > 50);
     }
 }

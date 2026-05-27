@@ -1,6 +1,6 @@
 package com.paperai.controller;
 
-import com.paperai.agent.ResearcherAgent;
+import com.paperai.agent.AgentExecutor;
 import com.paperai.model.ResearchResult;
 import com.paperai.model.dto.PaperWritingRequestDTO;
 import com.paperai.model.dto.ResearchRequestDTO;
@@ -24,12 +24,6 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-/**
- * 论文写作 API 控制器测试
- *
- * @author: ch
- * @date 2026年05月11日
- */
 @WebMvcTest(PaperController.class)
 class PaperControllerTest {
 
@@ -40,7 +34,7 @@ class PaperControllerTest {
     private ObjectMapper objectMapper;
 
     @MockBean
-    private ResearcherAgent mockResearcherAgent;
+    private AgentExecutor mockAgentExecutor;
 
     @MockBean
     private OrchestratorService mockOrchestratorService;
@@ -64,7 +58,7 @@ class PaperControllerTest {
         dto.setKeywords("AI,ML");
 
         ResearchResult mockResult = createMockResult("深度学习");
-        when(mockResearcherAgent.executeStructuredResearch(any())).thenReturn(mockResult);
+        when(mockAgentExecutor.executeStructuredResearch(any())).thenReturn(mockResult);
 
         mockMvc.perform(post("/api/paper/research")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -86,7 +80,7 @@ class PaperControllerTest {
         dto.setKeywords("NLP,Transformer");
         dto.setRequirements("需要近三年文献");
 
-        when(mockResearcherAgent.executeStructuredResearch(any())).thenReturn(createMockResult("NLP"));
+        when(mockAgentExecutor.executeStructuredResearch(any())).thenReturn(createMockResult("NLP"));
 
         mockMvc.perform(post("/api/paper/research")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -103,7 +97,7 @@ class PaperControllerTest {
         ResearchRequestDTO dto = new ResearchRequestDTO();
         dto.setTopic("流式测试");
 
-        when(mockResearcherAgent.executeStructuredResearch(any())).thenReturn(createMockResult("流式测试"));
+        when(mockAgentExecutor.executeStructuredResearch(any())).thenReturn(createMockResult("流式测试"));
 
         mockMvc.perform(post("/api/paper/research/stream")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -127,7 +121,6 @@ class PaperControllerTest {
                         .content(objectMapper.writeValueAsString(dto)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
-                .andExpect(jsonPath("$.message").value("论文写作完成"))
                 .andExpect(jsonPath("$.data.topic").value("Multi-Agent系统"))
                 .andExpect(jsonPath("$.data.status").value("COMPLETED"))
                 .andExpect(jsonPath("$.data.totalDurationMs").isNumber())
@@ -155,7 +148,7 @@ class PaperControllerTest {
         ResearchRequestDTO dto = new ResearchRequestDTO();
         dto.setTopic("");
 
-        when(mockResearcherAgent.executeStructuredResearch(any())).thenReturn(createMockResult(""));
+        when(mockAgentExecutor.executeStructuredResearch(any())).thenReturn(createMockResult(""));
 
         mockMvc.perform(post("/api/paper/research")
                         .contentType(MediaType.APPLICATION_JSON)

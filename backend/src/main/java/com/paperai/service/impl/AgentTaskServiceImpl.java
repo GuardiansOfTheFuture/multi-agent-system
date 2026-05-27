@@ -7,17 +7,13 @@ import com.paperai.model.enums.TaskStatus;
 import com.paperai.service.AgentTaskService;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
 
-/**
- * Agent 任务服务实现
- *
- * @author: ch
- * @date 2026年05月11日
- */
 @Slf4j
 @Service
 public class AgentTaskServiceImpl implements AgentTaskService {
@@ -26,6 +22,7 @@ public class AgentTaskServiceImpl implements AgentTaskService {
     private TaskMapper taskMapper;
 
     @Override
+    @CacheEvict(value = "agentTasks", key = "'paper:' + #paperId")
     public Task createTask(Long paperId, String agentRole, Integer sortOrder, String description, Integer versionNo) {
         Task task = new Task();
         task.setPaperId(paperId);
@@ -64,6 +61,7 @@ public class AgentTaskServiceImpl implements AgentTaskService {
     }
 
     @Override
+    @Cacheable(value = "agentTasks", key = "'paper:' + #paperId")
     public List<Task> getTasksByPaperId(Long paperId) {
         return taskMapper.selectList(
                 new LambdaQueryWrapper<Task>()

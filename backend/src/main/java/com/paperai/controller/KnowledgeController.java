@@ -24,12 +24,17 @@ public class KnowledgeController {
     }
 
     @PostMapping("/upload")
-    public ApiResultVO<KnowledgeDocument> upload(
+    public ApiResultVO<Map<String, Object>> upload(
             @RequestParam("file") MultipartFile file,
             @RequestParam(defaultValue = "PRIVATE") String scope,
             Authentication auth) {
         try {
-            return ApiResultVO.success("入库成功", knowledgeService.upload(file, userId(auth), scope));
+            KnowledgeDocument doc = knowledgeService.upload(file, userId(auth), scope);
+            return ApiResultVO.success("入库成功", Map.of(
+                    "docId", doc.getId(),
+                    "status", "COMPLETED",
+                    "totalChunks", doc.getTotalChunks() != null ? doc.getTotalChunks() : 0
+            ));
         } catch (Exception e) {
             log.error("入库失败", e);
             String msg = e.getMessage();

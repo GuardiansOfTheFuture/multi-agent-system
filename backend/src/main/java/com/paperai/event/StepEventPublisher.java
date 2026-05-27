@@ -1,4 +1,4 @@
-package com.paperai.service;
+package com.paperai.event;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,22 +12,18 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * 通过 SSE (Server-Sent Events) 推送 Agent 步骤事件到前端
- * 替代原来的 WebSocket STOMP 方案，更简单可靠
+ * SSE (Server-Sent Events) 推送 Agent 步骤事件到前端
  */
 @Service
 public class StepEventPublisher {
 
     private static final Logger log = LoggerFactory.getLogger(StepEventPublisher.class);
 
-    /** paperId → 该论文的所有 SSE 连接（通常 1 个） */
+    /** paperId → 该论文的所有 SSE 连接 */
     private final ConcurrentHashMap<Long, CopyOnWriteArrayList<SseEmitter>> emitters = new ConcurrentHashMap<>();
 
-    /**
-     * 为指定 paperId 创建一个 SSE 发射器，前端通过 GET /api/paper/write/{paperId}/stream 获取
-     */
     public SseEmitter createEmitter(Long paperId) {
-        SseEmitter emitter = new SseEmitter(30 * 60 * 1000L); // 30分钟超时自动清理
+        SseEmitter emitter = new SseEmitter(30 * 60 * 1000L);
         emitters.computeIfAbsent(paperId, k -> new CopyOnWriteArrayList<>()).add(emitter);
 
         emitter.onCompletion(() -> { remove(paperId, emitter); log.info("SSE completed: paperId={}", paperId); });
@@ -49,21 +45,12 @@ public class StepEventPublisher {
             list.remove(emitter);
             if (list.isEmpty()) emitters.remove(paperId);
         }
-        log.info("SSE emitter 移除: paperId={}", paperId);
     }
 
-    // ===== 推送方法 =====
-
-    /**
-     * 推送单个步骤事件
-     */
     public void publishStep(Long paperId, com.paperai.model.vo.PaperWritingVO.StepRecordVO step) {
         sendEvent(paperId, "step", step);
     }
 
-    /**
-     * 推送流式 token（逐字推送当前步骤的实时文本）
-     */
     public void publishStreamToken(Long paperId, int stepSeq, String agentName, String fullText) {
         sendEvent(paperId, "stream", Map.of(
                 "stepSeq", stepSeq,
@@ -73,30 +60,19 @@ public class StepEventPublisher {
         ));
     }
 
-    /**
-     * 推送单个节点的执行状态（FlowEngine 使用，包含 nodeId 供画布染色）
-     */
     public void publishNodeStatus(Long paperId, Map<String, Object> payload) {
         sendEvent(paperId, "node", payload);
     }
 
-    /**
-     * 推送完成事件，并关闭所有 emitter
-     */
     public void publishComplete(Long paperId) {
         sendEvent(paperId, "complete", Map.of("status", "COMPLETED", "paperId", paperId));
         closeEmitters(paperId);
     }
 
-    /**
-     * 推送错误事件，并关闭所有 emitter
-     */
     public void publishError(Long paperId, String error) {
         sendEvent(paperId, "error", Map.of("status", "FAILED", "error", error));
         closeEmitters(paperId);
     }
-
-    // ===== 内部方法 =====
 
     private void sendEvent(Long paperId, String eventName, Object data) {
         CopyOnWriteArrayList<SseEmitter> list = emitters.get(paperId);

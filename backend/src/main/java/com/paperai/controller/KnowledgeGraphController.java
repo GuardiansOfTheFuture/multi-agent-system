@@ -2,8 +2,10 @@ package com.paperai.controller;
 
 import com.paperai.model.entity.KnowledgeGraph;
 import com.paperai.model.vo.ApiResultVO;
-import com.paperai.service.KgExtractionService;
+import com.paperai.agent.AgentExecutor;
 import com.paperai.service.KnowledgeGraphService;
+import com.paperai.service.PaperService;
+import com.paperai.mq.TaskPublisher;
 import jakarta.annotation.Resource;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -25,7 +27,11 @@ public class KnowledgeGraphController {
     @Resource
     private KnowledgeGraphService knowledgeGraphService;
     @Resource
-    private KgExtractionService kgExtractionService;
+    private AgentExecutor agentExecutor;
+    @Resource
+    private PaperService paperService;
+    @Resource
+    private TaskPublisher taskPublisher;
 
     private Long userId(Authentication auth) {
         return (Long) auth.getPrincipal();
@@ -72,13 +78,22 @@ public class KnowledgeGraphController {
 
     @SuppressWarnings("unchecked")
     @PostMapping("/extract")
-    public ApiResultVO<String> extractFromText(@RequestBody Map<String, Object> body) {
+    public ApiResultVO<Map<String, Object>> extractFromText(@RequestBody Map<String, Object> body, Authentication auth) {
         String text = (String) body.get("text");
         String topic = (String) body.get("topic");
-        List<String> entityTypes = (List<String>) body.get("entityTypes");
-        List<String> relationTypes = (List<String>) body.get("relationTypes");
-        double confidence = body.get("confidence") instanceof Number n ? n.doubleValue() : 0.7;
-        return ApiResultVO.success("抽取完成", kgExtractionService.extractFromText(text, topic, entityTypes, relationTypes, confidence));
+
+        KnowledgeGraph kg = new KnowledgeGraph();
+        kg.setUserId(userId(auth));
+        kg.setName(topic != null ? topic + " 知识图谱" : "知识图谱");
+        kg.setDescription("AI自动抽取");
+        kg = knowledgeGraphService.create(kg);
+
+        String taskId = taskPublisher.publishKgExtract(kg.getId(), userId(auth), text, topic);
+        return ApiResultVO.success("抽取任务已加入队列", Map.of(
+                "kgId", kg.getId(),
+                "taskId", taskId,
+                "status", "QUEUED"
+        ));
     }
 
     @SuppressWarnings("unchecked")
@@ -87,7 +102,9 @@ public class KnowledgeGraphController {
         List<String> entityTypes = (List<String>) body.get("entityTypes");
         List<String> relationTypes = (List<String>) body.get("relationTypes");
         double confidence = body.get("confidence") instanceof Number n ? n.doubleValue() : 0.7;
-        return ApiResultVO.success("抽取完成", kgExtractionService.extractFromPaper(paperId, entityTypes, relationTypes, confidence));
+        String content = paperService.getLatestVersion(paperId).getContent();
+        String topic = paperService.getPaperById(paperId).getTitle();
+        return ApiResultVO.success("抽取完成", agentExecutor.extractKnowledgeGraph(content, topic, entityTypes, relationTypes, confidence));
     }
 
     /**

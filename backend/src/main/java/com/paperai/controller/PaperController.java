@@ -1,6 +1,6 @@
 package com.paperai.controller;
 
-import com.paperai.agent.ResearcherAgent;
+import com.paperai.agent.AgentExecutor;
 import com.paperai.model.ResearchResult;
 import com.paperai.model.dto.PaperWritingRequestDTO;
 import com.paperai.model.dto.ResearchRequestDTO;
@@ -10,8 +10,11 @@ import com.paperai.model.entity.Task;
 import com.paperai.model.vo.ApiResultVO;
 import com.paperai.model.vo.PaperWritingVO;
 import com.paperai.model.vo.ResearchResultVO;
+import com.paperai.event.StepEventPublisher;
 import com.paperai.service.AgentTaskService;
-import com.paperai.service.LlmCacheService;
+import com.paperai.cache.LlmCacheService;
+import com.paperai.converter.ExportConverter;
+import com.paperai.mq.TaskPublisher;
 import com.paperai.service.OrchestratorService;
 import com.paperai.service.PaperService;
 import jakarta.annotation.Resource;
@@ -38,17 +41,17 @@ import java.util.Map;
 @RequestMapping("/api/paper")
 public class PaperController {
 
-    @Resource private ResearcherAgent researcherAgent;
+    @Resource private AgentExecutor agentExecutor;
     @Resource private OrchestratorService orchestratorService;
     @Resource private PaperService paperService;
     @Resource private AgentTaskService agentTaskService;
-    @Resource private com.paperai.service.StepEventPublisher stepEventPublisher;
+    @Resource private StepEventPublisher stepEventPublisher;
     @Resource private ChatClient dashScopeChatClient;
     @Resource private LlmCacheService llmCacheService;
     @Resource private com.paperai.service.ReferenceService referenceService;
-    @Resource private com.paperai.service.ExportService exportService;
-
-
+    @Resource private ExportConverter exportConverter;
+    @Resource private TaskPublisher taskPublisher;
+    @org.springframework.beans.factory.annotation.Autowired(required = false) private org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
 
     // ===== 全流程写作 =====
 
@@ -71,19 +74,13 @@ public class PaperController {
             @RequestBody PaperWritingRequestDTO request,
             Authentication auth) {
         paperService.checkOwner(paperId, userId(auth));
-        Thread.startVirtualThread(() -> {
-            try {
-                orchestratorService.executeAsync(paperId, request);
-            } catch (Throwable e) {
-                log.error("异步写作异常: paperId={}, {}", paperId, e.getMessage(), e);
-                try {
-                    stepEventPublisher.publishError(paperId, e.getMessage() != null ? e.getMessage() : "写作异常");
-                } catch (Throwable ignored) {}
-            }
-        });
+        paperService.updateStatus(paperId, "WRITING");
+        String taskId = taskPublisher.publishPaperWrite(paperId, userId(auth), request);
         Map<String, Object> result = new HashMap<>();
-        result.put("paperId", paperId); result.put("status", "STARTED");
-        return ApiResultVO.success("写作任务已启动", result);
+        result.put("paperId", paperId);
+        result.put("taskId", taskId);
+        result.put("status", "QUEUED");
+        return ApiResultVO.success("写作任务已加入队列", result);
     }
 
     @PostMapping("/write")
@@ -151,13 +148,13 @@ public class PaperController {
 
     @PostMapping("/research")
     public ApiResultVO<ResearchResultVO> doResearch(@RequestBody ResearchRequestDTO request) {
-        ResearchResult result = researcherAgent.executeStructuredResearch(request);
+        ResearchResult result = agentExecutor.executeStructuredResearch(request);
         return ApiResultVO.success("研究完成", toResearchResultVO(result));
     }
 
     @PostMapping(value = "/research/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<String> doResearchStream(@RequestBody ResearchRequestDTO request) {
-        return Flux.just(researcherAgent.executeStructuredResearch(request).getRawResponse());
+        return Flux.just(agentExecutor.executeStructuredResearch(request).getRawResponse());
     }
 
     // ===== 论文管理 CRUD =====
@@ -377,6 +374,53 @@ public class PaperController {
 
     // ===== 论文导出 =====
 
+    /**
+     * 异步导出 — 发布到 MQ，返回 taskId
+     */
+    @PostMapping("/{id}/export")
+    public ApiResultVO<Map<String, Object>> exportPaperAsync(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "docx") String format,
+            Authentication auth) {
+        paperService.checkOwner(id, userId(auth));
+        String taskId = taskPublisher.publishExport(id, userId(auth), format);
+        return ApiResultVO.success("导出任务已加入队列", Map.of(
+                "taskId", taskId,
+                "paperId", id,
+                "format", format,
+                "status", "QUEUED"
+        ));
+    }
+
+    /**
+     * 轮询导出状态 — 前端通过 taskId 查询是否完成并获取下载数据
+     */
+    @GetMapping("/export/status/{taskId}")
+    public ApiResultVO<Map<String, Object>> exportStatus(@PathVariable String taskId) {
+        if (redisTemplate == null) {
+            return ApiResultVO.error("Redis 未启用，无法查询导出状态");
+        }
+        String key = "paperai:export:" + taskId;
+        String data = redisTemplate.opsForValue().get(key);
+        if (data == null) {
+            return ApiResultVO.success(Map.of("status", "PROCESSING"));
+        }
+        String meta = redisTemplate.opsForValue().get(key + ":meta");
+        String filename = "export";
+        String contentType = "application/octet-stream";
+        if (meta != null) {
+            String[] parts = meta.split("\\|", 2);
+            if (parts.length > 0) filename = parts[0];
+            if (parts.length > 1) contentType = parts[1];
+        }
+        return ApiResultVO.success(Map.of(
+                "status", "COMPLETED",
+                "data", data,
+                "filename", filename,
+                "contentType", contentType
+        ));
+    }
+
     @GetMapping("/{id}/export")
     public org.springframework.http.ResponseEntity<byte[]> exportPaper(
             @PathVariable Long id,
@@ -393,28 +437,29 @@ public class PaperController {
         String safeTitle = title.replaceAll("[\\\\/:*?\"<>|]", "_");
         if (safeTitle.length() > 50) safeTitle = safeTitle.substring(0, 50);
 
-        switch (format.toLowerCase()) {
+        String content = versionNo != null
+                ? paperService.getVersion(id, versionNo).getContent()
+                : paperService.getLatestVersion(id).getContent();
+        String fmt = format.toLowerCase();
+
+        switch (fmt) {
+            case "html" -> {
+                data = exportConverter.toHtml(content).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                filename = safeTitle + ".html";
+                contentType = "text/html; charset=UTF-8";
+            }
             case "pdf" -> {
-                data = exportService.toPdf(id, versionNo);
+                data = exportConverter.export("pdf", content, title);
                 filename = safeTitle + ".pdf";
                 contentType = "application/pdf";
             }
             case "latex" -> {
-                data = exportService.toLatex(id, versionNo);
+                data = exportConverter.export("latex", content, title);
                 filename = safeTitle + ".tex";
                 contentType = "application/x-latex";
             }
-            case "html" -> {
-                data = exportService.toHtml(
-                        versionNo != null
-                                ? paperService.getVersion(id, versionNo).getContent()
-                                : paperService.getLatestVersion(id).getContent()
-                ).getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                filename = safeTitle + ".html";
-                contentType = "text/html; charset=UTF-8";
-            }
             default -> {
-                data = exportService.toDocx(id, versionNo);
+                data = exportConverter.export("docx", content, title);
                 filename = safeTitle + ".docx";
                 contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
             }

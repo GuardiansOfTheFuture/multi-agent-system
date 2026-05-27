@@ -73,6 +73,7 @@ public class PaperServiceImpl implements PaperService {
     }
 
     @Override
+    @Cacheable(value = "papers", key = "'user:' + #userId + ':list'")
     public List<Paper> listByUserId(Long userId) {
         return paperMapper.selectList(
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Paper>()
@@ -82,6 +83,7 @@ public class PaperServiceImpl implements PaperService {
     }
 
     @Override
+    @Cacheable(value = "papers", key = "'user:' + #userId + ':page:' + #page + ':' + #size")
     public com.baomidou.mybatisplus.extension.plugins.pagination.Page<Paper> listByUserId(Long userId, int page, int size) {
         var p = new com.baomidou.mybatisplus.extension.plugins.pagination.Page<Paper>(page, size);
         return paperMapper.selectPage(p,
@@ -149,7 +151,8 @@ public class PaperServiceImpl implements PaperService {
     @Transactional
     @Caching(evict = {
         @CacheEvict(value = "papers", key = "#paperId"),
-        @CacheEvict(value = "paperVersions", key = "#paperId")
+        @CacheEvict(value = "paperVersions", key = "#paperId"),
+        @CacheEvict(value = "paperVersions", key = "#paperId + ':latest'")
     })
     public PaperVersion saveVersion(Long paperId, String stage, String summary, String content,
                                     String editType, String changeSummary) {
@@ -192,6 +195,7 @@ public class PaperServiceImpl implements PaperService {
     }
 
     @Override
+    @Cacheable(value = "paperVersions", key = "#paperId + ':latest'")
     public PaperVersion getLatestVersion(Long paperId) {
         return paperVersionMapper.findLatestByPaperId(paperId);
     }
@@ -199,7 +203,9 @@ public class PaperServiceImpl implements PaperService {
     /** 淘汰指定用户的论文列表缓存 */
     private void evictUserListCache(Long userId) {
         if (userId != null) {
-            Objects.requireNonNull(cacheManager.getCache("papers")).evict("user:" + userId);
+            var cache = Objects.requireNonNull(cacheManager.getCache("papers"));
+            cache.evict("user:" + userId);
+            cache.evict("user:" + userId + ":list");
         }
     }
 }

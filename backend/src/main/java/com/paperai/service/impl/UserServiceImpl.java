@@ -12,6 +12,7 @@ import com.paperai.service.UserService;
 import com.paperai.utils.JwtUtil;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -55,6 +56,11 @@ public class UserServiceImpl implements UserService {
         User user = userMapper.selectById(id);
         if (user == null) throw new BusinessException(ResultCode.NOT_FOUND, "用户不存在");
         return toUserVO(user);
+    }
+
+    @CacheEvict(value = "users", key = "#id")
+    public void evictUserCache(Long id) {
+        // no-op，仅用于淘汰缓存
     }
 
     private LoginVO toLoginVO(User user) {

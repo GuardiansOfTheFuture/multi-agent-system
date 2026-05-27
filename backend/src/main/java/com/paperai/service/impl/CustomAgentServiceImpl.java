@@ -8,6 +8,9 @@ import com.paperai.model.entity.CustomAgent;
 import com.paperai.service.CustomAgentService;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -19,6 +22,7 @@ public class CustomAgentServiceImpl implements CustomAgentService {
     @Resource private CustomAgentMapper customAgentMapper;
 
     @Override
+    @Cacheable(value = "customAgents", key = "'user:' + #userId")
     public List<CustomAgent> listByUser(Long userId) {
         return customAgentMapper.selectList(
                 new LambdaQueryWrapper<CustomAgent>()
@@ -28,6 +32,7 @@ public class CustomAgentServiceImpl implements CustomAgentService {
     }
 
     @Override
+    @Cacheable(value = "customAgents", key = "#id")
     public CustomAgent getById(Long id) {
         CustomAgent ca = customAgentMapper.selectById(id);
         if (ca == null) throw new BusinessException(ResultCode.NOT_FOUND, "自定义Agent不存在");
@@ -35,6 +40,7 @@ public class CustomAgentServiceImpl implements CustomAgentService {
     }
 
     @Override
+    @CacheEvict(value = "customAgents", key = "'user:' + #agent.userId")
     public CustomAgent create(CustomAgent agent) {
         if (agent.getEnabled() == null) agent.setEnabled(1);
         if (agent.getTemperature() == null) agent.setTemperature(0.7);
@@ -45,6 +51,10 @@ public class CustomAgentServiceImpl implements CustomAgentService {
     }
 
     @Override
+    @Caching(evict = {
+        @CacheEvict(value = "customAgents", key = "#id"),
+        @CacheEvict(value = "customAgents", key = "'user:' + #userId")
+    })
     public CustomAgent update(Long id, CustomAgent agent, Long userId) {
         CustomAgent existing = customAgentMapper.selectById(id);
         if (existing == null) throw new BusinessException(ResultCode.NOT_FOUND, "自定义Agent不存在");
@@ -56,6 +66,10 @@ public class CustomAgentServiceImpl implements CustomAgentService {
     }
 
     @Override
+    @Caching(evict = {
+        @CacheEvict(value = "customAgents", key = "#id"),
+        @CacheEvict(value = "customAgents", key = "'user:' + #userId")
+    })
     public void delete(Long id, Long userId) {
         CustomAgent existing = customAgentMapper.selectById(id);
         if (existing == null) throw new BusinessException(ResultCode.NOT_FOUND, "自定义Agent不存在");

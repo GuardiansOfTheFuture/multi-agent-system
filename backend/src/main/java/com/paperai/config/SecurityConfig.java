@@ -19,9 +19,11 @@ import java.util.List;
 public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
+    private final RagContextFilter ragContextFilter;
 
-    public SecurityConfig(JwtAuthFilter jwtAuthFilter) {
+    public SecurityConfig(JwtAuthFilter jwtAuthFilter, RagContextFilter ragContextFilter) {
         this.jwtAuthFilter = jwtAuthFilter;
+        this.ragContextFilter = ragContextFilter;
     }
 
     @Bean
@@ -43,7 +45,8 @@ public class SecurityConfig {
                 ).permitAll()
                 .anyRequest().authenticated()
             )
-            .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+            .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+            .addFilterAfter(ragContextFilter, JwtAuthFilter.class);
         return http.build();
     }
 

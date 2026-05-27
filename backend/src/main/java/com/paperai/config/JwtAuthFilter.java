@@ -22,7 +22,8 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private final JwtUtil jwtUtil;
     private final RedissonClient redisson;
 
-    public JwtAuthFilter(JwtUtil jwtUtil, RedissonClient redisson) {
+    public JwtAuthFilter(JwtUtil jwtUtil,
+                          @org.springframework.beans.factory.annotation.Autowired(required = false) RedissonClient redisson) {
         this.jwtUtil = jwtUtil;
         this.redisson = redisson;
     }
@@ -45,10 +46,14 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         }
 
         if (token != null && jwtUtil.validateToken(token)) {
-            // 检查 JWT 黑名单
-            String tokenHash = DigestUtils.md5DigestAsHex(token.getBytes());
-            RBucket<String> bucket = redisson.getBucket("paperai:jwt:blacklist:" + tokenHash);
-            if (!bucket.isExists()) {
+            // 检查 JWT 黑名单（Redis 不可用时跳过）
+            boolean blocked = false;
+            if (redisson != null) {
+                String tokenHash = DigestUtils.md5DigestAsHex(token.getBytes());
+                RBucket<String> bucket = redisson.getBucket("paperai:jwt:blacklist:" + tokenHash);
+                blocked = bucket.isExists();
+            }
+            if (!blocked) {
                 Long userId = jwtUtil.getUserIdFromToken(token);
                 UsernamePasswordAuthenticationToken auth =
                         new UsernamePasswordAuthenticationToken(userId, null, Collections.emptyList());
