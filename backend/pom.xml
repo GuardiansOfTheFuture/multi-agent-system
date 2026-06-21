@@ -42,17 +42,28 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
-        <!-- Spring AI Alibaba (DashScope/通义千问) -->
+        <!-- Spring AI Alibaba (DashScope/通义千问) — 用于 Embedding -->
         <dependency>
             <groupId>com.alibaba.cloud.ai</groupId>
             <artifactId>spring-ai-alibaba-starter</artifactId>
             <version>1.0.0-M6.1</version>
         </dependency>
 
+        <!-- Spring AI OpenAI 兼容 — 用于 MiMo 大模型 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-openai-spring-boot-starter</artifactId>
+        </dependency>
+
         <!-- MyBatis-Plus + MySQL -->
         <dependency>
             <groupId>com.baomidou</groupId>
             <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+            <version>3.5.9</version>
+        </dependency>
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-jsqlparser</artifactId>
             <version>3.5.9</version>
         </dependency>
         <dependency>

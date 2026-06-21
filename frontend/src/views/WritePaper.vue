@@ -379,7 +379,8 @@ const selectedPaperId = ref(null)
 async function loadPendingPapers() {
   try {
     const res = await getPaperList()
-    pendingPapers.value = (res.data || []).filter(p => p.status === 'DRAFT' || p.status === 'FAILED')
+    const data = res.data || {}
+    pendingPapers.value = (data.records || []).filter(p => p.status === 'DRAFT' || p.status === 'FAILED')
   } catch (_) {}
 }
 

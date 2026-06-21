@@ -19,9 +19,13 @@
         class="side-menu"
         @click="handleMenuClick"
       >
+        <a-menu-item key="/chat">
+          <template #icon><message-outlined /></template>
+          <span>AI 写作</span>
+        </a-menu-item>
         <a-menu-item key="/write">
           <template #icon><edit-outlined /></template>
-          <span>论文写作</span>
+          <span>论文写作（表单）</span>
         </a-menu-item>
         <a-menu-item key="/papers">
           <template #icon><file-text-outlined /></template>
@@ -58,7 +62,7 @@
         <span class="header-title">{{ pageTitle }}</span>
         <div class="header-right">
           <a-tag color="purple" style="border:1px solid rgba(114,46,209,0.3);background:rgba(114,46,209,0.1)">
-            通义千问 qwen3.6-plus
+            MiMo V2.5 Pro
           </a-tag>
           <a-dropdown>
             <a class="user-dropdown" @click.prevent>
@@ -95,7 +99,7 @@ import { useUserStore } from '@/stores/user'
 import {
   EditOutlined, FileTextOutlined, RobotOutlined, ApartmentOutlined, ShareAltOutlined,
   UserOutlined, LogoutOutlined, DownOutlined, MenuUnfoldOutlined, MenuFoldOutlined,
-  CodeOutlined, BookOutlined
+  CodeOutlined, BookOutlined, MessageOutlined
 } from '@ant-design/icons-vue'
 
 const router = useRouter()

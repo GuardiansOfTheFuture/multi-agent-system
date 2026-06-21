@@ -189,7 +189,7 @@
         <div v-else-if="selectedNode && !isEditMode" class="readonly-panel">
           <div class="ro-item"><span class="ro-label">角色</span><a-tag :color="roleColor(selectedNode.data?.agentRole)" size="small">{{ selectedNode.data?.roleName }}</a-tag></div>
           <div class="ro-item"><span class="ro-label">步骤</span><span style="color:rgba(255,255,255,0.7)">{{ selectedNode.data?.label }}</span></div>
-          <div class="ro-item"><span class="ro-label">模型</span><span style="color:rgba(255,255,255,0.5)">{{ selectedNode.data?.config?.model || 'qwen-max' }}</span></div>
+          <div class="ro-item"><span class="ro-label">模型</span><span style="color:rgba(255,255,255,0.5)">{{ selectedNode.data?.config?.model || 'mimo-v2.5-pro' }}</span></div>
           <div class="ro-item"><span class="ro-label">温度</span><span style="color:rgba(255,255,255,0.5)">{{ selectedNode.data?.config?.temperature ?? 0.7 }}</span></div>
           <div class="ro-item" v-if="selectedNode.data?.config?.notes"><span class="ro-label">备注</span><span style="color:rgba(255,255,255,0.4);font-size:11px;max-width:140px;text-align:right">{{ selectedNode.data.config.notes }}</span></div>
         </div>
@@ -354,7 +354,7 @@ const roleOptions = computed(() => {
   const custom = CUSTOM_ROLE_ENTRIES.value.map(c => ({ value: c.code, label: c.icon + ' ' + c.name }))
   return [...base, ...custom]
 })
-const modelOptions = ['qwen-max', 'qwen-plus', 'qwen-turbo', 'deepseek-v3', 'deepseek-r1'].map(m => ({ value: m, label: m }))
+const modelOptions = ['mimo-v2.5-pro', 'qwen-plus', 'qwen-max', 'deepseek-v3'].map(m => ({ value: m, label: m }))
 
 // ===== 流程管理 =====
 const availableFlows = ref([])
@@ -393,7 +393,7 @@ const selectedEdge = ref(null)
 const editingLabel = ref('')
 const editingRole = ref('SUPERVISOR')
 const editingPrompt = ref('')
-const editingModel = ref('qwen-max')
+const editingModel = ref('mimo-v2.5-pro')
 const editingTemperature = ref(0.7)
 const editingTimeout = ref(120)
 const editingRetry = ref(2)
@@ -405,7 +405,7 @@ watch(selectedNode, (n) => {
   editingLabel.value = (n.data?.label || '').replace(/^[^\s]+\s/, '')
   editingRole.value = n.data?.agentRole || 'SUPERVISOR'
   editingPrompt.value = n.data?.config?.systemPrompt || ''
-  editingModel.value = n.data?.config?.model || 'qwen-max'
+  editingModel.value = n.data?.config?.model || 'mimo-v2.5-pro'
   editingTemperature.value = n.data?.config?.temperature ?? 0.7
   editingTimeout.value = n.data?.config?.timeout || 120
   editingRetry.value = n.data?.config?.retryCount ?? 2
@@ -490,7 +490,7 @@ function onDrop(event) {
       label: `${icon} ${dragItem.label.replace(' Agent', '')}`,
       roleName: ROLE_NAMES[role] || custom?.name || role,
       stepIndex: nodes.value.length + 1,
-      config: { systemPrompt: custom?.systemPrompt || '', model: custom?.model || 'qwen-max', temperature: custom?.temperature ?? 0.7, timeout: 120, retryCount: 2, notes: '' },
+      config: { systemPrompt: custom?.systemPrompt || '', model: custom?.model || 'mimo-v2.5-pro', temperature: custom?.temperature ?? 0.7, timeout: 120, retryCount: 2, notes: '' },
       status: 'pending'
     }
   }
@@ -714,7 +714,7 @@ function addNodeAt(x, y) {
   nodes.value.push({
     id, type: 'agent',
     position: { x: x - 220, y: y - 120 },
-    data: { agentRole: 'WRITER', label: '✍️ 新节点', roleName: '写作者', stepIndex: nodes.value.length + 1, config: { model: 'qwen-max', temperature: 0.7, timeout: 120, retryCount: 2, notes: '' }, status: 'pending' }
+    data: { agentRole: 'WRITER', label: '✍️ 新节点', roleName: '写作者', stepIndex: nodes.value.length + 1, config: { model: 'mimo-v2.5-pro', temperature: 0.7, timeout: 120, retryCount: 2, notes: '' }, status: 'pending' }
   })
 }
 
@@ -1061,24 +1061,14 @@ async function onFlowSelect(flowId) {
   currentFlowId.value = flowId
   flowDirty.value = false
 
-  // 预设流程
-  const presetFlow = availableFlows.value.find(f => f.id === flowId && f.source === 'preset')
-  if (presetFlow) {
-    flowSource.value = 'preset'
-    flowDbId.value = null
-    flowName.value = presetFlow.name
-    loadPresetGraph(flowId)
-    return
-  }
-
-  // 自定义流程 — 从 API 加载
-  const customFlow = availableFlows.value.find(f => f.id === flowId && f.source === 'custom')
-  if (customFlow && customFlow.dbId) {
-    flowSource.value = 'custom'
-    flowDbId.value = customFlow.dbId
-    flowName.value = customFlow.name
+  // 从 availableFlows 中查找（预设和自定义都从数据库加载）
+  const flow = availableFlows.value.find(f => f.id === flowId)
+  if (flow && flow.dbId) {
+    flowSource.value = flow.source || 'custom'
+    flowDbId.value = flow.dbId
+    flowName.value = flow.name
     try {
-      const res = await getFlow(customFlow.dbId)
+      const res = await getFlow(flow.dbId)
       if (res.data?.graphData) {
         const data = JSON.parse(res.data.graphData)
         nodes.value = data.nodes || []
@@ -1096,13 +1086,34 @@ async function onFlowSelect(flowId) {
   }
 }
 
-function loadPresetGraph(flowId) {
+async function loadPresetGraph(flowId) {
+  // 从 availableFlows 中查找预设流程的 dbId
+  const flow = availableFlows.value.find(f => f.id === flowId && f.source === 'preset')
+  if (flow && flow.dbId) {
+    try {
+      const res = await getFlow(flow.dbId)
+      if (res.data?.graphData) {
+        const data = JSON.parse(res.data.graphData)
+        nodes.value = data.nodes || []
+        edges.value = data.edges || []
+        selectedNode.value = null
+        history.value = []
+        historyIndex.value = -1
+        pushHistory()
+        nextTick(() => fitView())
+        return
+      }
+    } catch (e) {
+      console.error('加载预设流程失败:', e)
+    }
+  }
+  // 兜底：如果数据库没有，用默认步骤生成简单流程
   const steps = DEFAULT_STEPS_MAP[flowId] || DEFAULT_STEPS_MAP.standard
   const ns = steps.map((s, i) => ({
     id: `node-${i}`,
     type: 'agent',
     position: { x: 280, y: i * 110 + 40 },
-    data: { agentRole: s.role, label: s.label, roleName: ROLE_NAMES[s.role] || s.role, stepIndex: i + 1, config: { systemPrompt: '', model: 'qwen-max', temperature: 0.7, timeout: 120, retryCount: 2, notes: '' }, status: 'pending' }
+    data: { agentRole: s.role, label: s.label, roleName: ROLE_NAMES[s.role] || s.role, stepIndex: i + 1, config: { systemPrompt: '', model: 'mimo-v2.5-pro', temperature: 0.7, timeout: 120, retryCount: 2, notes: '' }, status: 'pending' }
   }))
   const es = []
   for (let i = 0; i < ns.length - 1; i++) {
@@ -1271,7 +1282,7 @@ onMounted(async () => {
       code: 'CUSTOM_' + a.id,
       name: a.name,
       icon: a.icon || '🤖',
-      model: a.model || 'qwen-max',
+      model: a.model || 'mimo-v2.5-pro',
       temperature: a.temperature != null ? a.temperature : 0.7,
       systemPrompt: a.systemPrompt || '',
       color: '#8b5cf6',
@@ -1287,7 +1298,8 @@ onMounted(async () => {
   // 加载论文任务（供论文节点选择）
   try {
     const paperRes = await getPaperList()
-    canvasPaperTasks.value = (paperRes.data || []).filter(p => p.status === 'DRAFT' || p.status === 'FAILED')
+    const paperData = paperRes.data || {}
+    canvasPaperTasks.value = (paperData.records || []).filter(p => p.status === 'DRAFT' || p.status === 'FAILED')
   } catch (_) {}
 
   // 恢复上次编辑的流程，否则加载默认标准流程

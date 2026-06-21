@@ -108,6 +108,206 @@ export function createCustomAgent(data) { return request.post('/agent/custom', d
 export function updateCustomAgent(id, data) { return request.put(`/agent/custom/${id}`, data) }
 export function deleteCustomAgent(id) { return request.delete(`/agent/custom/${id}`) }
 export function getAgentModels() { return request.get('/agent/models') }
+
+// ===== 对话 =====
+export function getConversationList() { return request.get('/chat/list') }
+export function createConversation(title) { return request.post('/chat/create', { title }) }
+export function getConversationMessages(convId) { return request.get(`/chat/${convId}/messages`) }
+export function sendChatMessage(convId, message, thinking = false) {
+  return request.post(`/chat/${convId}/send`, { message, thinking })
+}
+export function deleteConversation(convId) { return request.delete(`/chat/${convId}`) }
+
+/**
+ * 流式发送消息 — SSE
+ * @param {number} convId
+ * @param {string} message
+ * @param {boolean} thinking
+ * @param {object} callbacks - { onThink, onTasklist, onTaskUpdate, onThinking, onToken, onDoc, onDone, onError }
+ * @returns {function} abort - 调用可中断请求
+ */
+export function sendChatMessageStream(convId, message, thinking, callbacks) {
+  const { onThink, onTasklist, onTaskUpdate, onThinking, onToken, onDoc, onDone, onError } = callbacks
+  const token = localStorage.getItem('paperai_token') || ''
+  const controller = new AbortController()
+
+  fetch(`/api/chat/${convId}/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify({ message, thinking }),
+    signal: controller.signal,
+  }).then(async response => {
+    if (!response.ok) {
+      const text = await response.text()
+      onError?.(new Error(text || `HTTP ${response.status}`))
+      return
+    }
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      // 解析 SSE 事件
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''  // 最后一个不完整行放回 buffer
+
+      let eventType = ''
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
+          const jsonStr = line.slice(6)
+          try {
+            const data = JSON.parse(jsonStr)
+            if (eventType === 'think') onThink?.(data.round, data.content, data.streaming)
+            else if (eventType === 'tasklist') onTasklist?.(data.tasks)
+            else if (eventType === 'task_update') onTaskUpdate?.(data.index, data.status, data.summary)
+            else if (eventType === 'thinking') onThinking?.(data.content)
+            else if (eventType === 'token') onToken?.(data.content)
+            else if (eventType === 'doc') onDoc?.(data.content)
+            else if (eventType === 'done') onDone?.(data)
+            else if (eventType === 'error') onError?.(new Error(data.error || '未知错误'))
+          } catch (e) {
+            // 忽略解析失败
+          }
+          eventType = ''
+        }
+      }
+    }
+  }).catch(err => {
+    if (err.name !== 'AbortError') onError?.(err)
+  })
+
+  return () => controller.abort()
+}
+
+/**
+ * 流式改写选中文本 — SSE
+ * @param {number} convId
+ * @param {string} selectedText
+ * @param {string} instruction
+ * @param {object} callbacks - { onToken, onDone, onError }
+ * @returns {function} abort
+ */
+export function sendRewriteStream(convId, selectedText, instruction, callbacks) {
+  const { onToken, onDone, onError } = callbacks
+  const token = localStorage.getItem('paperai_token') || ''
+  const controller = new AbortController()
+
+  fetch(`/api/chat/${convId}/rewrite`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify({ selectedText, instruction }),
+    signal: controller.signal,
+  }).then(async response => {
+    if (!response.ok) {
+      onError?.(new Error(`HTTP ${response.status}`))
+      return
+    }
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      let eventType = ''
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6))
+            if (eventType === 'token') onToken?.(data.content)
+            else if (eventType === 'done') onDone?.(data.content)
+            else if (eventType === 'error') onError?.(new Error(data.error || '未知错误'))
+          } catch (e) { /* ignore */ }
+          eventType = ''
+        }
+      }
+    }
+  }).catch(err => {
+    if (err.name !== 'AbortError') onError?.(err)
+  })
+
+  return () => controller.abort()
+}
+
+/**
+ * Agent 审阅文档 — SSE
+ * @param {number} convId
+ * @param {string} agentRole - SUPERVISOR / REVIEWER / POLISHER / RESEARCHER
+ * @param {object} callbacks - { onStart, onToken, onDone, onError }
+ * @returns {function} abort
+ */
+export function sendAgentReviewStream(convId, agentRole, callbacks) {
+  const { onStart, onToken, onDone, onError } = callbacks
+  const token = localStorage.getItem('paperai_token') || ''
+  const controller = new AbortController()
+
+  fetch(`/api/chat/${convId}/agent-review`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify({ agentRole }),
+    signal: controller.signal,
+  }).then(async response => {
+    if (!response.ok) {
+      onError?.(new Error(`HTTP ${response.status}`))
+      return
+    }
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      let eventType = ''
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6))
+            if (eventType === 'start') onStart?.(data.agentName, data.agentRole)
+            else if (eventType === 'token') onToken?.(data.content)
+            else if (eventType === 'done') onDone?.(data.content)
+            else if (eventType === 'error') onError?.(new Error(data.error || '未知错误'))
+          } catch (e) { /* ignore */ }
+          eventType = ''
+        }
+      }
+    }
+  }).catch(err => {
+    if (err.name !== 'AbortError') onError?.(err)
+  })
+
+  return () => controller.abort()
+}
+
 export function healthCheck() { return request.get('/paper/health') }
 
 // ===== 流程管理 =====

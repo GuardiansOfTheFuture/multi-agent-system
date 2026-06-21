@@ -44,7 +44,6 @@ public class PaperServiceImpl implements PaperService {
     private PaperServiceImpl self;
 
     @Override
-    @CacheEvict(value = "papers", key = "'user:' + #userId")
     public Paper createPaper(PaperWritingRequestDTO request, Long userId) {
         Paper paper = new Paper();
         paper.setTitle(request.getTopic());
@@ -55,6 +54,7 @@ public class PaperServiceImpl implements PaperService {
         paper.setUserId(userId);
         paper.setKgId(request.getKgId());
         paperMapper.insert(paper);
+        evictUserListCache(userId);
         log.info("创建论文: id={}, title={}, userId={}", paper.getId(), paper.getTitle(), userId);
         return paper;
     }
@@ -200,12 +200,18 @@ public class PaperServiceImpl implements PaperService {
         return paperVersionMapper.findLatestByPaperId(paperId);
     }
 
-    /** 淘汰指定用户的论文列表缓存 */
+    /** 淘汰指定用户的论文列表缓存（含分页） */
     private void evictUserListCache(Long userId) {
         if (userId != null) {
             var cache = Objects.requireNonNull(cacheManager.getCache("papers"));
             cache.evict("user:" + userId);
             cache.evict("user:" + userId + ":list");
+            // 驱逐分页缓存 — 常见页码+大小组合
+            for (int page = 1; page <= 10; page++) {
+                for (int size : new int[]{5, 10, 20, 50}) {
+                    cache.evict("user:" + userId + ":page:" + page + ":" + size);
+                }
+            }
         }
     }
 }

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(set HTTP_PROXY=)",
+      "Bash(set HTTPS_PROXY=)"
+    ]
+  }
+}

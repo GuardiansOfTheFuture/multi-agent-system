@@ -38,8 +38,8 @@ public class AgentExecutor {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public AgentExecutor(ChatClient dashScopeChatClient, LlmCacheService llmCacheService) {
-        this.defaultChatClient = dashScopeChatClient;
+    public AgentExecutor(ChatClient chatClient, LlmCacheService llmCacheService) {
+        this.defaultChatClient = chatClient;
         this.llmCacheService = llmCacheService;
     }
 
@@ -132,7 +132,6 @@ public class AgentExecutor {
             return cached;
         }
 
-        StringBuilder full = new StringBuilder();
         try {
             String response = client.prompt()
                     .system(systemPrompt)
@@ -140,19 +139,35 @@ public class AgentExecutor {
                     .stream()
                     .content()
                     .doOnNext(chunk -> {
-                        full.append(chunk);
-                        if (onToken != null) onToken.accept(full.toString());
+                        if (onToken != null) onToken.accept(chunk);
                     })
-                    .blockLast();
+                    .collectList()
+                    .map(list -> String.join("", list))
+                    .block();
 
-            String result = full.toString();
-            log.info("[AgentExecutor] LLM 流式响应完成，长度: {}", result.length());
-            llmCacheService.put(cacheKey, result);
-            return result;
+            log.info("[AgentExecutor] LLM 流式响应完成，长度: {}",
+                    response != null ? response.length() : 0);
+            llmCacheService.put(cacheKey, response);
+            return response;
         } catch (Exception e) {
-            log.error("[AgentExecutor] LLM 流式调用失败", e);
-            throw new BusinessException(ResultCode.AI_SERVICE_ERROR.getCode(),
-                    "AI 服务流式调用失败：" + extractShortMessage(e));
+            // 流式失败时降级为非流式调用
+            log.warn("[AgentExecutor] 流式调用失败，降级为同步调用: {}", e.getMessage());
+            try {
+                String response = client.prompt()
+                        .system(systemPrompt)
+                        .user(userMessage)
+                        .call()
+                        .content();
+                if (onToken != null && response != null) onToken.accept(response);
+                log.info("[AgentExecutor] 同步降级调用完成，长度: {}",
+                        response != null ? response.length() : 0);
+                llmCacheService.put(cacheKey, response);
+                return response;
+            } catch (Exception e2) {
+                log.error("[AgentExecutor] LLM 调用失败", e2);
+                throw new BusinessException(ResultCode.AI_SERVICE_ERROR.getCode(),
+                        "AI 服务调用失败：" + extractShortMessage(e2));
+            }
         }
     }
 

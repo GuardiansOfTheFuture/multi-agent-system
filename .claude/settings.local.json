@@ -22,7 +22,23 @@
       "Write",
       "Read",
       "Glob",
-      "Grep"
+      "Grep",
+      "Bash(RABBITMQ_LOG_BASE=\"/c/Users/Administrator/AppData/Roaming/RabbitMQ/log\" RABBITMQ_MNESIA_BASE=\"/c/Users/Administrator/AppData/Roaming/RabbitMQ/db\" \"/c/Program Files/RabbitMQ Server/rabbitmq_server-4.3.1/sbin/rabbitmq-server.bat\")",
+      "Bash(\"/c/Program Files/Erlang OTP/bin/erl.exe\" -eval 'application:ensure_all_started\\(ssl\\), io:format\\(\"SSL OK~n\"\\), halt\\(\\).' -noshell)",
+      "Read(//c/Program Files/Erlang OTP/lib/ssl-11.2.1/ebin/**)",
+      "Read(//c/Program Files/Erlang OTP/lib/**)",
+      "Bash(ls \"/c/Program Files/Erlang OTP/lib/\" | grep ssl)",
+      "Read(//c/Program Files/Erlang OTP/lib//**)",
+      "Bash(\"/c/Program Files/Erlang OTP/bin/erl.exe\" -eval 'io:format\\(\"~s~n\", [code:lib_dir\\(ssl\\)]\\), halt\\(\\).' -noshell)",
+      "Bash(rm -rf \"/c/Program Files/Erlang OTP/lib/ssl-11.2.12.6\" \"/c/Program Files/Erlang OTP/lib/ssl-11.2.9\" && echo \"Deleted old SSL libs\" && ls \"/c/Program Files/Erlang OTP/lib/\" | grep ssl)",
+      "Bash(sc delete *)",
+      "Bash(\"/c/Program Files/RabbitMQ Server/rabbitmq_server-4.3.1/sbin/rabbitmq-service.bat\" install)"
+    ],
+    "additionalDirectories": [
+      "C:\\Program Files\\Erlang OTP\\lib\\ssl-11.2.12.6"
     ]
+  },
+  "enabledPlugins": {
+    "skill-creator@claude-plugins-official": true
   }
 }

@@ -16,13 +16,19 @@ const routes = [
   {
     path: '/',
     component: () => import('@/views/Layout.vue'),
-    redirect: '/write',
+    redirect: '/chat',
     children: [
+      {
+        path: 'chat',
+        name: 'ChatView',
+        component: () => import('@/views/ChatView.vue'),
+        meta: { title: 'AI 写作' }
+      },
       {
         path: 'write',
         name: 'WritePaper',
         component: () => import('@/views/WritePaper.vue'),
-        meta: { title: '论文写作' }
+        meta: { title: '论文写作（表单）' }
       },
       {
         path: 'papers',

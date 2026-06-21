@@ -164,12 +164,10 @@ import { message } from 'ant-design-vue'
 import { MessageOutlined, PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons-vue'
 
 const modelOptions = [
-  { value: 'qwen3.5-flash', label: 'Qwen 3.5 Flash' },
+  { value: 'mimo-v2.5-pro', label: 'MiMo V2.5 Pro' },
   { value: 'qwen-plus', label: 'Qwen Plus' },
   { value: 'qwen-max', label: 'Qwen Max' },
-  { value: 'qwen-turbo', label: 'Qwen Turbo' },
-  { value: 'deepseek-v3', label: 'DeepSeek V3' },
-  { value: 'deepseek-r1', label: 'DeepSeek R1' }
+  { value: 'deepseek-v3', label: 'DeepSeek V3' }
 ]
 
 const builtinAgents = [
@@ -189,7 +187,7 @@ const chatLoading = ref(false)
 const currentAgent = ref(null)
 const chatInput = ref('')
 const chatResponse = ref('')
-const chatModel = ref('qwen-max')
+const chatModel = ref('mimo-v2.5-pro')
 
 // Edit
 const editVisible = ref(false)
@@ -197,7 +195,7 @@ const editingId = ref(null)
 const saving = ref(false)
 const editForm = reactive({
   icon: '🤖', name: '', description: '', systemPrompt: '',
-  model: 'qwen-max', temperature: 0.7
+  model: 'mimo-v2.5-pro', temperature: 0.7
 })
 
 function truncateText(text, max) {
@@ -218,7 +216,7 @@ async function loadCustom() {
 
 function openCreate() {
   editingId.value = null
-  Object.assign(editForm, { icon: '🤖', name: '', description: '', systemPrompt: '', model: 'qwen-max', temperature: 0.7 })
+  Object.assign(editForm, { icon: '🤖', name: '', description: '', systemPrompt: '', model: 'mimo-v2.5-pro', temperature: 0.7 })
   editVisible.value = true
 }
 
@@ -229,7 +227,7 @@ function openEdit(agent) {
     name: agent.name,
     description: agent.description || '',
     systemPrompt: agent.systemPrompt || '',
-    model: agent.model || 'qwen-max',
+    model: agent.model || 'mimo-v2.5-pro',
     temperature: agent.temperature != null ? agent.temperature : 0.7
   })
   editVisible.value = true
@@ -271,7 +269,7 @@ function openChat(agent) {
   currentAgent.value = agent
   chatInput.value = ''
   chatResponse.value = ''
-  chatModel.value = 'qwen-max'
+  chatModel.value = 'mimo-v2.5-pro'
   chatVisible.value = true
 }
 
